@@ -39,8 +39,8 @@ class Config {
   // Storage (immutable)
   readonly DB_PATH = optional('DB_PATH', './data/bot.db');
 
-  // Initial API keys (loaded once, pool manages them after)
-  readonly INITIAL_API_KEYS: string[] = required('ANTHROPIC_API_KEYS')
+  // Initial API keys (optional — can be added later via /admin addkey in Discord)
+  readonly INITIAL_API_KEYS: string[] = (process.env['ANTHROPIC_API_KEYS'] || '')
     .split(',')
     .map((k) => k.trim())
     .filter(Boolean);

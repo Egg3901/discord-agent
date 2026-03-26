@@ -24,17 +24,12 @@ if [ -z "$DISCORD_CLIENT_ID" ]; then
   exit 1
 fi
 
-read -p "Anthropic API Key(s) (required, comma-separated for multiple): " ANTHROPIC_API_KEYS
-if [ -z "$ANTHROPIC_API_KEYS" ]; then
-  echo "Error: At least one Anthropic API key is required."
-  exit 1
-fi
-
 # Optional
-read -p "Discord Guild/Server ID (optional, for dev): " DISCORD_GUILD_ID
-read -p "Admin Discord User ID(s) (comma-separated): " ADMIN_USER_IDS
-read -p "GitHub Token (optional, for repo context): " GITHUB_TOKEN
-read -p "Claude Model [claude-sonnet-4-20250514]: " ANTHROPIC_MODEL
+read -p "Discord Guild/Server ID (optional, faster command registration for dev): " DISCORD_GUILD_ID
+read -p "Admin Discord User ID(s) (comma-separated, for /admin and /config commands): " ADMIN_USER_IDS
+read -p "GitHub Token (optional, for /repo context fetching): " GITHUB_TOKEN
+
+read -p "Default Claude Model [claude-sonnet-4-20250514]: " ANTHROPIC_MODEL
 ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
 
 read -p "Max sessions per user [3]: " MAX_SESSIONS_PER_USER
@@ -50,8 +45,9 @@ DISCORD_TOKEN=${DISCORD_TOKEN}
 DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
 DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
 
-# Anthropic API Keys
-ANTHROPIC_API_KEYS=${ANTHROPIC_API_KEYS}
+# Anthropic — API keys are managed via /admin addkey in Discord
+# You can optionally pre-load keys here (comma-separated), or leave blank
+ANTHROPIC_API_KEYS=
 ANTHROPIC_MODEL=${ANTHROPIC_MODEL}
 
 # GitHub (optional)
@@ -71,4 +67,8 @@ EOF
 
 echo ""
 echo "Created ${ENV_FILE} successfully!"
-echo "Run 'npm run dev' or 'npm start' to launch the bot."
+echo ""
+echo "NEXT STEPS:"
+echo "  1. Start the bot:  npm start"
+echo "  2. In Discord, run:  /admin addkey <your-anthropic-api-key>"
+echo "  3. You're ready to go — use /code or /ask"
