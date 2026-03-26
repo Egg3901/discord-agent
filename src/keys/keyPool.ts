@@ -2,20 +2,21 @@ import { nanoid } from 'nanoid';
 import { logger } from '../utils/logger.js';
 import { KeyExhaustedError, QueueTimeoutError } from '../utils/errors.js';
 import { KeyStore } from './keyStore.js';
-import type { ManagedKey, AcquiredKey, KeyPoolStats } from './types.js';
+import type { ManagedKey, AcquiredKey, KeyPoolStats, Provider } from './types.js';
 
 interface QueueEntry {
   resolve: (value: AcquiredKey) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
   position: number;
+  provider?: Provider;
   onPositionChange?: (pos: number) => void;
 }
 
 const QUEUE_TIMEOUT_MS = 60_000;
 const MAX_QUEUE_SIZE = 50;
 const HEALTH_CHECK_INTERVAL_MS = 60_000;
-const RESURRECTION_BACKOFF_MS = 120_000; // dead keys wait 2 min before retry
+const RESURRECTION_BACKOFF_MS = 120_000;
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
@@ -37,6 +38,7 @@ export class KeyPool {
       const key: ManagedKey = {
         id: row.id,
         apiKey: row.api_key,
+        provider: (row.provider as Provider) || 'anthropic',
         status: 'healthy',
         requestsThisMinute: 0,
         requestsToday: 0,
@@ -52,11 +54,11 @@ export class KeyPool {
       logger.info({ count: stored.length }, 'Loaded API keys from database');
     }
 
-    // Add any env-provided keys that aren't already in DB
+    // Add any env-provided keys that aren't already in DB (assumed Anthropic)
     for (const apiKey of initialApiKeys) {
       const alreadyExists = [...this.keys.values()].some((k) => k.apiKey === apiKey);
       if (!alreadyExists) {
-        this.addKey(apiKey, 'env');
+        this.addKey(apiKey, 'anthropic', 'env');
       }
     }
 
@@ -76,14 +78,12 @@ export class KeyPool {
       this.resurrectDeadKeys();
     }, HEALTH_CHECK_INTERVAL_MS);
 
-    // Persist request counts every 5 minutes
     this.persistTimer = setInterval(() => {
       this.persistStats();
     }, 5 * MINUTE_MS);
   }
 
-  addKey(apiKey: string, addedBy: string = 'admin'): string {
-    // Check for duplicate
+  addKey(apiKey: string, provider: Provider = 'anthropic', addedBy: string = 'admin'): string {
     for (const existing of this.keys.values()) {
       if (existing.apiKey === apiKey) {
         return existing.id;
@@ -94,6 +94,7 @@ export class KeyPool {
     const key: ManagedKey = {
       id,
       apiKey,
+      provider,
       status: 'healthy',
       requestsThisMinute: 0,
       requestsToday: 0,
@@ -103,12 +104,10 @@ export class KeyPool {
       rateLimitResetAt: null,
     };
     this.keys.set(id, key);
-    this.store.save(id, apiKey, addedBy);
-    logger.info({ keyId: id }, 'API key added to pool and persisted');
+    this.store.save(id, apiKey, provider, addedBy);
+    logger.info({ keyId: id, provider }, 'API key added to pool and persisted');
 
-    // Drain queue now that a new key is available
     this.drainQueue();
-
     return id;
   }
 
@@ -122,15 +121,18 @@ export class KeyPool {
   }
 
   /**
-   * Acquire a key from the pool. If no key is available, queues the request.
-   * Returns a queue position callback so callers can report position to users.
+   * Acquire a key for a specific provider. If no key is available, queues the request.
    */
-  async acquire(onPositionChange?: (position: number) => void): Promise<AcquiredKey> {
-    if (this.keys.size === 0) {
+  async acquire(
+    provider: Provider = 'anthropic',
+    onPositionChange?: (position: number) => void,
+  ): Promise<AcquiredKey> {
+    const hasKeysForProvider = [...this.keys.values()].some((k) => k.provider === provider);
+    if (!hasKeysForProvider) {
       throw new KeyExhaustedError();
     }
 
-    const key = this.selectKey();
+    const key = this.selectKey(provider);
     if (key) {
       return this.wrapKey(key);
     }
@@ -139,7 +141,6 @@ export class KeyPool {
       throw new KeyExhaustedError();
     }
 
-    // No key available — queue the request
     return new Promise<AcquiredKey>((resolve, reject) => {
       const position = this.queue.length + 1;
 
@@ -150,13 +151,13 @@ export class KeyPool {
         reject(new QueueTimeoutError());
       }, QUEUE_TIMEOUT_MS);
 
-      this.queue.push({ resolve, reject, timer, position, onPositionChange });
+      this.queue.push({ resolve, reject, timer, position, provider, onPositionChange });
 
       if (onPositionChange) {
         onPositionChange(position);
       }
 
-      logger.debug({ queueDepth: this.queue.length }, 'Request queued');
+      logger.debug({ queueDepth: this.queue.length, provider }, 'Request queued');
     });
   }
 
@@ -202,18 +203,18 @@ export class KeyPool {
     this.queue = [];
   }
 
-  private selectKey(): ManagedKey | null {
+  private selectKey(provider?: Provider): ManagedKey | null {
     const now = Date.now();
     let best: ManagedKey | null = null;
 
     for (const key of this.keys.values()) {
+      if (provider && key.provider !== provider) continue;
       if (key.status === 'dead') continue;
 
       if (key.status === 'degraded' && key.rateLimitResetAt && now < key.rateLimitResetAt) {
         continue;
       }
 
-      // If degraded key has passed reset time, mark as healthy
       if (key.status === 'degraded' && key.rateLimitResetAt && now >= key.rateLimitResetAt) {
         key.status = 'healthy';
         key.rateLimitResetAt = null;
@@ -245,7 +246,6 @@ export class KeyPool {
         key.consecutiveFailures++;
         if (key.consecutiveFailures >= 3) {
           key.status = 'dead';
-          // Dead keys won't be retried until resurrectDeadKeys runs
           key.rateLimitResetAt = Date.now() + RESURRECTION_BACKOFF_MS;
           logger.warn({ keyId: key.id }, 'Key marked as dead after 3 consecutive failures');
         } else {
@@ -262,14 +262,17 @@ export class KeyPool {
   }
 
   private drainQueue(): void {
-    while (this.queue.length > 0) {
-      const nextKey = this.selectKey();
-      if (!nextKey) break;
-
-      const entry = this.queue.shift()!;
-      clearTimeout(entry.timer);
-      entry.resolve(this.wrapKey(nextKey));
+    const remaining: QueueEntry[] = [];
+    for (const entry of this.queue) {
+      const nextKey = this.selectKey(entry.provider);
+      if (nextKey) {
+        clearTimeout(entry.timer);
+        entry.resolve(this.wrapKey(nextKey));
+      } else {
+        remaining.push(entry);
+      }
     }
+    this.queue = remaining;
     this.updateQueuePositions();
   }
 
@@ -289,7 +292,7 @@ export class KeyPool {
     for (const key of this.keys.values()) {
       if (key.status === 'dead' && key.rateLimitResetAt && now >= key.rateLimitResetAt) {
         key.status = 'degraded';
-        key.rateLimitResetAt = now + 1000; // small grace period
+        key.rateLimitResetAt = now + 1000;
         key.consecutiveFailures = 0;
         logger.info({ keyId: key.id }, 'Resurrecting dead key for retry');
       }

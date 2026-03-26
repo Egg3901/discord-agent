@@ -21,7 +21,17 @@ export function createAdminCommand(
           .setName('addkey')
           .setDescription('Add an API key to the pool')
           .addStringOption((opt) =>
-            opt.setName('key').setDescription('Anthropic API key').setRequired(true),
+            opt.setName('key').setDescription('API key').setRequired(true),
+          )
+          .addStringOption((opt) =>
+            opt
+              .setName('provider')
+              .setDescription('API provider (default: anthropic)')
+              .setRequired(false)
+              .addChoices(
+                { name: 'Anthropic (Claude)', value: 'anthropic' },
+                { name: 'Google (Gemini)', value: 'google' },
+              ),
           ),
       )
       .addSubcommand((sub) =>
@@ -74,9 +84,11 @@ export function createAdminCommand(
 
       if (subcommand === 'addkey') {
         const apiKey = interaction.options.getString('key', true);
-        const id = keyPool.addKey(apiKey, interaction.user.id);
+        const provider = (interaction.options.getString('provider') || 'anthropic') as 'anthropic' | 'google';
+        const id = keyPool.addKey(apiKey, provider, interaction.user.id);
+        const providerLabel = provider === 'google' ? 'Google (Gemini)' : 'Anthropic (Claude)';
         await interaction.reply({
-          content: `Key added with ID: \`${id}\`. It's now available for use.`,
+          content: `Key added with ID: \`${id}\` for **${providerLabel}**. It's now available for use.`,
           ephemeral: true,
         });
       }
@@ -104,7 +116,8 @@ export function createAdminCommand(
           const masked = k.apiKey.slice(0, 10) + '...' + k.apiKey.slice(-4);
           const status =
             k.status === 'healthy' ? '🟢' : k.status === 'degraded' ? '🟡' : '🔴';
-          return `${status} \`${k.id}\` — \`${masked}\` — ${k.totalRequests} total, ${k.requestsThisMinute}/min`;
+          const prov = k.provider === 'google' ? 'Gemini' : 'Claude';
+          return `${status} \`${k.id}\` [${prov}] — \`${masked}\` — ${k.totalRequests} total, ${k.requestsThisMinute}/min`;
         });
 
         await interaction.reply({

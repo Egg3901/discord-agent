@@ -23,6 +23,7 @@ function runMigrations(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS api_keys (
       id TEXT PRIMARY KEY,
       api_key TEXT NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'anthropic',
       added_at INTEGER NOT NULL,
       added_by TEXT NOT NULL DEFAULT 'system',
       total_requests INTEGER DEFAULT 0,

@@ -1,8 +1,10 @@
 export type KeyStatus = 'healthy' | 'degraded' | 'dead';
+export type Provider = 'anthropic' | 'google';
 
 export interface ManagedKey {
   id: string;
   apiKey: string;
+  provider: Provider;
   status: KeyStatus;
   requestsThisMinute: number;
   requestsToday: number;

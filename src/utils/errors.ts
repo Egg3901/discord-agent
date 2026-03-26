@@ -66,7 +66,7 @@ export class QueueTimeoutError extends AppError {
 }
 
 /**
- * Extract a user-friendly error message from an Anthropic API error.
+ * Extract a user-friendly error message from an API error (Anthropic or Google).
  */
 export function formatApiError(err: unknown): string {
   if (err instanceof AppError && err.userMessage) {
@@ -75,29 +75,38 @@ export function formatApiError(err: unknown): string {
 
   if (err && typeof err === 'object') {
     const e = err as any;
+    const message = (e.message || '').toLowerCase();
 
     // Anthropic SDK errors have status + message
-    if (e.status === 401) {
+    if (e.status === 401 || message.includes('api key not valid')) {
       return 'API key authentication failed. An admin should check the configured keys with `/admin keys`.';
     }
-    if (e.status === 403) {
+    if (e.status === 403 || message.includes('permission denied')) {
       return 'API key does not have access to this model. Try switching models with `/model`.';
     }
-    if (e.status === 404) {
+    if (e.status === 404 || message.includes('not found')) {
       return 'Model not found. Try switching to a different model with `/model`.';
     }
-    if (e.status === 429) {
+    if (e.status === 429 || message.includes('resource exhausted') || message.includes('rate limit')) {
       return 'API rate limit hit. Your request has been queued — please wait.';
     }
-    if (e.status === 529 || e.status === 503) {
-      return 'Claude API is temporarily overloaded. Please try again in a few seconds.';
+    if (e.status === 529 || e.status === 503 || message.includes('overloaded')) {
+      return 'API is temporarily overloaded. Please try again in a few seconds.';
     }
     if (e.status >= 500) {
-      return 'Claude API server error. Please try again.';
+      return 'API server error. Please try again.';
     }
 
     if (e.code === 'ENOTFOUND' || e.code === 'ECONNREFUSED') {
-      return 'Cannot reach the Claude API. Check the server\'s network connection.';
+      return 'Cannot reach the API. Check the server\'s network connection.';
+    }
+
+    // Google SDK specific errors
+    if (message.includes('api_key_invalid') || message.includes('invalid api key')) {
+      return 'Google API key is invalid. An admin should check the configured keys with `/admin keys`.';
+    }
+    if (message.includes('quota')) {
+      return 'Google API quota exceeded. Please try again later or switch models with `/model`.';
     }
   }
 

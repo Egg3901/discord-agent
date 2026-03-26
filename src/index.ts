@@ -14,7 +14,7 @@ import { createConfigCommand } from './bot/commands/config.js';
 import { createModelCommand } from './bot/commands/model.js';
 import { createHelpCommand } from './bot/commands/help.js';
 import { KeyPool } from './keys/keyPool.js';
-import { AnthropicClient } from './claude/anthropicClient.js';
+import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
 import { RateLimiter } from './bot/middleware/rateLimiter.js';
 import { RepoFetcher } from './github/repoFetcher.js';
@@ -29,15 +29,15 @@ async function main() {
 
   // Initialize core services
   const keyPool = new KeyPool(config.INITIAL_API_KEYS);
-  const anthropicClient = new AnthropicClient(keyPool);
+  const aiClient = new AIClient(keyPool);
   const sessionManager = new SessionManager();
   const rateLimiter = new RateLimiter();
   const repoFetcher = new RepoFetcher();
 
   // Create commands
   const commands: CommandHandler[] = [
-    createAskCommand(anthropicClient, rateLimiter),
-    createCodeCommand(sessionManager, anthropicClient, rateLimiter),
+    createAskCommand(aiClient, rateLimiter),
+    createCodeCommand(sessionManager, aiClient, rateLimiter),
     createSessionCommand(sessionManager),
     createAdminCommand(keyPool, sessionManager),
     createRepoCommand(sessionManager, repoFetcher),
@@ -60,7 +60,7 @@ async function main() {
   // Wire up event handlers
   handleReady(client);
   handleInteractionCreate(client, commandMap);
-  handleMessageCreate(client, sessionManager, anthropicClient, rateLimiter);
+  handleMessageCreate(client, sessionManager, aiClient, rateLimiter);
 
   // Login
   await client.login(config.DISCORD_TOKEN);
