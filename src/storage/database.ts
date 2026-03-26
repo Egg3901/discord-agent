@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -6,6 +8,8 @@ let db: Database.Database | null = null;
 
 export function getDatabase(): Database.Database {
   if (!db) {
+    // Auto-create the data directory if it doesn't exist
+    mkdirSync(dirname(config.DB_PATH), { recursive: true });
     db = new Database(config.DB_PATH);
     db.pragma('journal_mode = WAL');
     runMigrations(db);
