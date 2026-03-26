@@ -25,12 +25,6 @@ class Config {
   // GitHub
   GITHUB_TOKEN: string | null = process.env['GITHUB_TOKEN'] || null;
 
-  // Admin (immutable — set via env only)
-  readonly ADMIN_USER_IDS: string[] = (process.env['ADMIN_USER_IDS'] || '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-
   // Limits (mutable at runtime)
   MAX_SESSIONS_PER_USER = parseInt(optional('MAX_SESSIONS_PER_USER', '3'), 10);
   MAX_REQUESTS_PER_MINUTE = parseInt(optional('MAX_REQUESTS_PER_MINUTE', '10'), 10);

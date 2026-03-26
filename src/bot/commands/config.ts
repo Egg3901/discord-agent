@@ -42,7 +42,7 @@ export function createConfigCommand(): CommandHandler {
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAdmin(interaction.user.id)) {
+      if (!isAdmin(interaction.member as import('discord.js').GuildMember | null)) {
         await interaction.reply({
           content: 'You do not have permission to use this command.',
           ephemeral: true,

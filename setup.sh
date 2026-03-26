@@ -26,7 +26,6 @@ fi
 
 # Optional
 read -p "Discord Guild/Server ID (optional, faster command registration for dev): " DISCORD_GUILD_ID
-read -p "Admin Discord User ID(s) (comma-separated, for /admin and /config commands): " ADMIN_USER_IDS
 read -p "GitHub Token (optional, for /repo context fetching): " GITHUB_TOKEN
 
 read -p "Default Claude Model [claude-sonnet-4-20250514]: " ANTHROPIC_MODEL
@@ -45,16 +44,11 @@ DISCORD_TOKEN=${DISCORD_TOKEN}
 DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
 DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
 
-# Anthropic — API keys are managed via /admin addkey in Discord
-# You can optionally pre-load keys here (comma-separated), or leave blank
-ANTHROPIC_API_KEYS=
+# Anthropic
 ANTHROPIC_MODEL=${ANTHROPIC_MODEL}
 
 # GitHub (optional)
 GITHUB_TOKEN=${GITHUB_TOKEN}
-
-# Admin Discord User IDs
-ADMIN_USER_IDS=${ADMIN_USER_IDS}
 
 # Limits
 MAX_SESSIONS_PER_USER=${MAX_SESSIONS_PER_USER}
@@ -69,6 +63,7 @@ echo ""
 echo "Created ${ENV_FILE} successfully!"
 echo ""
 echo "NEXT STEPS:"
-echo "  1. Start the bot:  npm start"
+echo "  1. Start the bot:  npm run dev"
 echo "  2. In Discord, run:  /admin addkey <your-anthropic-api-key>"
+echo "     (requires Discord Administrator permission)"
 echo "  3. You're ready to go — use /code or /ask"
