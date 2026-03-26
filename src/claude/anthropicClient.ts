@@ -12,6 +12,7 @@ export interface ConversationMessage {
 export interface StreamOptions {
   repoContext?: RepoContext;
   modelOverride?: string;
+  onQueuePosition?: (position: number) => void;
 }
 
 export class AnthropicClient {
@@ -28,7 +29,7 @@ export class AnthropicClient {
     const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
     const model = options.modelOverride || config.ANTHROPIC_MODEL;
 
-    const { key, release } = await this.keyPool.acquire();
+    const { key, release } = await this.keyPool.acquire(options.onQueuePosition);
 
     try {
       const client = new Anthropic({ apiKey: key.apiKey });

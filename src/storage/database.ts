@@ -51,6 +51,12 @@ function runMigrations(db: Database.Database): void {
       timestamp INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS allowed_roles (
+      role_id TEXT PRIMARY KEY,
+      role_name TEXT NOT NULL,
+      added_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_thread_id ON sessions(thread_id);
     CREATE INDEX IF NOT EXISTS idx_usage_log_user_id ON usage_log(user_id);

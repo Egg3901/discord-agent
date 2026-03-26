@@ -30,6 +30,9 @@ class Config {
   MAX_REQUESTS_PER_MINUTE = parseInt(optional('MAX_REQUESTS_PER_MINUTE', '10'), 10);
   MAX_CONTEXT_TOKENS = parseInt(optional('MAX_CONTEXT_TOKENS', '100000'), 10);
 
+  // Access control: managed via /admin allowrole and stored in database
+  // Empty = everyone can use the bot
+
   // Storage (immutable)
   readonly DB_PATH = optional('DB_PATH', './data/bot.db');
 

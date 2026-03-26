@@ -70,6 +70,7 @@ async function main() {
     logger.info('Shutting down...');
     keyPool.destroy();
     sessionManager.destroy();
+    rateLimiter.destroy();
     closeDatabase();
     client.destroy();
     process.exit(0);

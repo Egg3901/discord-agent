@@ -14,7 +14,7 @@ export function createHelpCommand(): CommandHandler {
       const help = `**Discord Agent — Claude Code via Discord**
 
 **Getting Started:**
-Use \`/code\` to start a threaded coding session. Follow-up messages in the thread continue the conversation — no slash command needed after the first message.
+Use \`/code\` to start a threaded coding session. Follow-up messages in the thread continue the conversation — no slash command needed after the first message. You can also attach code files directly.
 
 **Commands:**
 > \`/ask <question>\` — One-shot question (no session, quick answer)
@@ -25,20 +25,24 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 > \`/session status\` — View your active sessions
 > \`/help\` — This message
 
-**Admin Commands:**
-> \`/admin addkey <key>\` — Add an Anthropic API key
+**Admin Commands (requires Administrator):**
+> \`/admin addkey <key>\` — Add an Anthropic API key (persisted across restarts)
 > \`/admin removekey <id>\` — Remove an API key
 > \`/admin keys\` — List keys and health status
+> \`/admin allowrole @role\` — Restrict bot usage to a role
+> \`/admin denyrole @role\` — Remove a role restriction
+> \`/admin roles\` — List allowed roles
 > \`/admin stats\` — Bot statistics
 > \`/admin prune\` — Force-prune stale sessions
 > \`/config set <key> <value>\` — Set a config value (values never displayed)
 > \`/config list\` — Show settable config keys
 
 **Tips:**
-• Responses stream in real-time — you'll see a "Thinking..." animation while Claude processes
-• Long responses are automatically split across multiple messages
-• Code blocks are never broken mid-block
+• Attach code files (.ts, .py, .js, etc.) to messages — they're included as context
+• Responses stream in real-time with progress updates
+• If all keys are busy, you'll see your queue position
 • Sessions auto-expire after 30 minutes of inactivity
+• API keys and role settings survive bot restarts
 • Use \`/model\` to switch between Opus, Sonnet, and Haiku mid-session`;
 
       await interaction.reply({ content: help, ephemeral: true });

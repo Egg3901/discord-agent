@@ -1,52 +1,95 @@
 import { nanoid } from 'nanoid';
 import { logger } from '../utils/logger.js';
 import { KeyExhaustedError, QueueTimeoutError } from '../utils/errors.js';
+import { KeyStore } from './keyStore.js';
 import type { ManagedKey, AcquiredKey, KeyPoolStats } from './types.js';
 
 interface QueueEntry {
   resolve: (value: AcquiredKey) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  position: number;
+  onPositionChange?: (pos: number) => void;
 }
 
 const QUEUE_TIMEOUT_MS = 60_000;
+const MAX_QUEUE_SIZE = 50;
 const HEALTH_CHECK_INTERVAL_MS = 60_000;
+const RESURRECTION_BACKOFF_MS = 120_000; // dead keys wait 2 min before retry
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
 export class KeyPool {
   private keys: Map<string, ManagedKey> = new Map();
   private queue: QueueEntry[] = [];
+  private store: KeyStore;
   private minuteResetTimer: ReturnType<typeof setInterval>;
   private dayResetTimer: ReturnType<typeof setInterval>;
   private healthCheckTimer: ReturnType<typeof setInterval>;
+  private persistTimer: ReturnType<typeof setInterval>;
 
-  constructor(apiKeys: string[]) {
-    for (const apiKey of apiKeys) {
-      this.addKey(apiKey);
+  constructor(initialApiKeys: string[]) {
+    this.store = new KeyStore();
+
+    // Load persisted keys from database first
+    const stored = this.store.loadAll();
+    for (const row of stored) {
+      const key: ManagedKey = {
+        id: row.id,
+        apiKey: row.api_key,
+        status: 'healthy',
+        requestsThisMinute: 0,
+        requestsToday: 0,
+        totalRequests: row.total_requests,
+        lastUsed: 0,
+        consecutiveFailures: 0,
+        rateLimitResetAt: null,
+      };
+      this.keys.set(row.id, key);
     }
 
-    // Reset per-minute counters every minute
+    if (stored.length > 0) {
+      logger.info({ count: stored.length }, 'Loaded API keys from database');
+    }
+
+    // Add any env-provided keys that aren't already in DB
+    for (const apiKey of initialApiKeys) {
+      const alreadyExists = [...this.keys.values()].some((k) => k.apiKey === apiKey);
+      if (!alreadyExists) {
+        this.addKey(apiKey, 'env');
+      }
+    }
+
     this.minuteResetTimer = setInterval(() => {
       for (const key of this.keys.values()) {
         key.requestsThisMinute = 0;
       }
     }, MINUTE_MS);
 
-    // Reset daily counters every day
     this.dayResetTimer = setInterval(() => {
       for (const key of this.keys.values()) {
         key.requestsToday = 0;
       }
     }, DAY_MS);
 
-    // Health check dead keys periodically
     this.healthCheckTimer = setInterval(() => {
-      this.resurrectDegradedKeys();
+      this.resurrectDeadKeys();
     }, HEALTH_CHECK_INTERVAL_MS);
+
+    // Persist request counts every 5 minutes
+    this.persistTimer = setInterval(() => {
+      this.persistStats();
+    }, 5 * MINUTE_MS);
   }
 
-  addKey(apiKey: string): string {
+  addKey(apiKey: string, addedBy: string = 'admin'): string {
+    // Check for duplicate
+    for (const existing of this.keys.values()) {
+      if (existing.apiKey === apiKey) {
+        return existing.id;
+      }
+    }
+
     const id = nanoid(8);
     const key: ManagedKey = {
       id,
@@ -60,36 +103,59 @@ export class KeyPool {
       rateLimitResetAt: null,
     };
     this.keys.set(id, key);
-    logger.info({ keyId: id }, 'API key added to pool');
+    this.store.save(id, apiKey, addedBy);
+    logger.info({ keyId: id }, 'API key added to pool and persisted');
+
+    // Drain queue now that a new key is available
+    this.drainQueue();
+
     return id;
   }
 
   removeKey(id: string): boolean {
     const removed = this.keys.delete(id);
     if (removed) {
-      logger.info({ keyId: id }, 'API key removed from pool');
+      this.store.remove(id);
+      logger.info({ keyId: id }, 'API key removed from pool and database');
     }
     return removed;
   }
 
   /**
    * Acquire a key from the pool. If no key is available, queues the request.
+   * Returns a queue position callback so callers can report position to users.
    */
-  async acquire(): Promise<AcquiredKey> {
+  async acquire(onPositionChange?: (position: number) => void): Promise<AcquiredKey> {
+    if (this.keys.size === 0) {
+      throw new KeyExhaustedError();
+    }
+
     const key = this.selectKey();
     if (key) {
       return this.wrapKey(key);
     }
 
+    if (this.queue.length >= MAX_QUEUE_SIZE) {
+      throw new KeyExhaustedError();
+    }
+
     // No key available — queue the request
     return new Promise<AcquiredKey>((resolve, reject) => {
+      const position = this.queue.length + 1;
+
       const timer = setTimeout(() => {
         const idx = this.queue.findIndex((e) => e.resolve === resolve);
         if (idx !== -1) this.queue.splice(idx, 1);
+        this.updateQueuePositions();
         reject(new QueueTimeoutError());
       }, QUEUE_TIMEOUT_MS);
 
-      this.queue.push({ resolve, reject, timer });
+      this.queue.push({ resolve, reject, timer, position, onPositionChange });
+
+      if (onPositionChange) {
+        onPositionChange(position);
+      }
+
       logger.debug({ queueDepth: this.queue.length }, 'Request queued');
     });
   }
@@ -127,6 +193,8 @@ export class KeyPool {
     clearInterval(this.minuteResetTimer);
     clearInterval(this.dayResetTimer);
     clearInterval(this.healthCheckTimer);
+    clearInterval(this.persistTimer);
+    this.persistStats();
     for (const entry of this.queue) {
       clearTimeout(entry.timer);
       entry.reject(new Error('Pool destroyed'));
@@ -139,10 +207,8 @@ export class KeyPool {
     let best: ManagedKey | null = null;
 
     for (const key of this.keys.values()) {
-      // Skip dead keys
       if (key.status === 'dead') continue;
 
-      // Skip degraded keys that haven't reached their reset time
       if (key.status === 'degraded' && key.rateLimitResetAt && now < key.rateLimitResetAt) {
         continue;
       }
@@ -154,7 +220,6 @@ export class KeyPool {
         key.consecutiveFailures = 0;
       }
 
-      // Pick the key with the fewest requests this minute
       if (!best || key.requestsThisMinute < best.requestsThisMinute) {
         best = key;
       }
@@ -180,16 +245,16 @@ export class KeyPool {
         key.consecutiveFailures++;
         if (key.consecutiveFailures >= 3) {
           key.status = 'dead';
+          // Dead keys won't be retried until resurrectDeadKeys runs
+          key.rateLimitResetAt = Date.now() + RESURRECTION_BACKOFF_MS;
           logger.warn({ keyId: key.id }, 'Key marked as dead after 3 consecutive failures');
         } else {
           key.status = 'degraded';
-          // Default: back off for 60 seconds
           key.rateLimitResetAt = Date.now() + 60_000;
           logger.warn({ keyId: key.id, failures: key.consecutiveFailures }, 'Key marked as degraded');
         }
       }
 
-      // Try to drain the queue
       this.drainQueue();
     };
 
@@ -205,17 +270,39 @@ export class KeyPool {
       clearTimeout(entry.timer);
       entry.resolve(this.wrapKey(nextKey));
     }
+    this.updateQueuePositions();
   }
 
-  private resurrectDegradedKeys(): void {
+  private updateQueuePositions(): void {
+    for (let i = 0; i < this.queue.length; i++) {
+      const entry = this.queue[i];
+      const newPos = i + 1;
+      if (entry.position !== newPos) {
+        entry.position = newPos;
+        entry.onPositionChange?.(newPos);
+      }
+    }
+  }
+
+  private resurrectDeadKeys(): void {
     const now = Date.now();
     for (const key of this.keys.values()) {
-      if (key.status === 'dead') {
-        // Give dead keys another chance after health check interval
+      if (key.status === 'dead' && key.rateLimitResetAt && now >= key.rateLimitResetAt) {
         key.status = 'degraded';
-        key.rateLimitResetAt = now;
+        key.rateLimitResetAt = now + 1000; // small grace period
         key.consecutiveFailures = 0;
         logger.info({ keyId: key.id }, 'Resurrecting dead key for retry');
+      }
+    }
+    this.drainQueue();
+  }
+
+  private persistStats(): void {
+    for (const key of this.keys.values()) {
+      try {
+        this.store.updateRequestCount(key.id, key.totalRequests);
+      } catch {
+        // Ignore persistence errors
       }
     }
   }
