@@ -1,0 +1,79 @@
+import { config } from './config.js';
+import { logger } from './utils/logger.js';
+import { createDiscordClient } from './bot/client.js';
+import { handleReady } from './bot/events/ready.js';
+import { handleInteractionCreate } from './bot/events/interactionCreate.js';
+import { handleMessageCreate } from './bot/events/messageCreate.js';
+import { registerCommands } from './bot/commands/registry.js';
+import { createAskCommand } from './bot/commands/ask.js';
+import { createCodeCommand } from './bot/commands/code.js';
+import { createSessionCommand } from './bot/commands/session.js';
+import { createAdminCommand } from './bot/commands/admin.js';
+import { createRepoCommand } from './bot/commands/repo.js';
+import { KeyPool } from './keys/keyPool.js';
+import { AnthropicClient } from './claude/anthropicClient.js';
+import { SessionManager } from './sessions/sessionManager.js';
+import { RateLimiter } from './bot/middleware/rateLimiter.js';
+import { RepoFetcher } from './github/repoFetcher.js';
+import { getDatabase, closeDatabase } from './storage/database.js';
+import type { CommandHandler } from './bot/commands/types.js';
+
+async function main() {
+  logger.info('Starting Discord Agent...');
+
+  // Initialize database
+  getDatabase();
+
+  // Initialize core services
+  const keyPool = new KeyPool(config.ANTHROPIC_API_KEYS);
+  const anthropicClient = new AnthropicClient(keyPool);
+  const sessionManager = new SessionManager();
+  const rateLimiter = new RateLimiter();
+  const repoFetcher = new RepoFetcher();
+
+  // Create commands
+  const commands: CommandHandler[] = [
+    createAskCommand(anthropicClient, rateLimiter),
+    createCodeCommand(sessionManager, anthropicClient, rateLimiter),
+    createSessionCommand(sessionManager),
+    createAdminCommand(keyPool, sessionManager),
+    createRepoCommand(sessionManager, repoFetcher),
+  ];
+
+  const commandMap = new Map<string, CommandHandler>();
+  for (const cmd of commands) {
+    commandMap.set(cmd.data.name, cmd);
+  }
+
+  // Register slash commands with Discord
+  await registerCommands(commands);
+
+  // Create and configure Discord client
+  const client = createDiscordClient();
+
+  // Wire up event handlers
+  handleReady(client);
+  handleInteractionCreate(client, commandMap);
+  handleMessageCreate(client, sessionManager, anthropicClient, rateLimiter);
+
+  // Login
+  await client.login(config.DISCORD_TOKEN);
+
+  // Graceful shutdown
+  const shutdown = () => {
+    logger.info('Shutting down...');
+    keyPool.destroy();
+    sessionManager.destroy();
+    closeDatabase();
+    client.destroy();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+main().catch((err) => {
+  logger.fatal({ err }, 'Failed to start bot');
+  process.exit(1);
+});

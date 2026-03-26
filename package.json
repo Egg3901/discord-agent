@@ -1,0 +1,29 @@
+{
+  "name": "discord-agent",
+  "version": "1.0.0",
+  "description": "Discord bot providing Claude Code/Codex functionality via multiple API keys",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "register-commands": "tsx src/bot/commands/registry.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@octokit/rest": "^21.0.0",
+    "better-sqlite3": "^11.0.0",
+    "discord.js": "^14.14.0",
+    "dotenv": "^16.4.0",
+    "nanoid": "^5.0.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}
