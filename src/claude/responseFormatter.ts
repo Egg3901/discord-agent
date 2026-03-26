@@ -2,8 +2,8 @@ import type { Message, TextChannel, ThreadChannel } from 'discord.js';
 import { splitMessage } from '../utils/chunks.js';
 import { logger } from '../utils/logger.js';
 
-const STREAM_FLUSH_INTERVAL_MS = 1500;
-const DISCORD_RATE_LIMIT_BUFFER_MS = 1200;
+const STREAM_FLUSH_INTERVAL_MS = 4000;
+const DISCORD_RATE_LIMIT_BUFFER_MS = 1500;
 const TYPING_INTERVAL_MS = 8000;
 const PROGRESS_DOTS_INTERVAL_MS = 3000;
 

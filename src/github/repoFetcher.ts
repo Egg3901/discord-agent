@@ -11,10 +11,12 @@ const MAX_FILE_SIZE = 100_000; // 100KB per file
 const MAX_TOTAL_FILES = 20;
 
 export class RepoFetcher {
-  private octokit: Octokit;
-
-  constructor() {
-    this.octokit = new Octokit({
+  /**
+   * Returns an Octokit instance using the current GITHUB_TOKEN from config.
+   * Re-reads on every call so runtime token changes (via /admin or /config) take effect.
+   */
+  private get octokit(): Octokit {
+    return new Octokit({
       auth: config.GITHUB_TOKEN || undefined,
     });
   }

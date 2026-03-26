@@ -6,6 +6,7 @@ import {
 import { isAdmin, addAllowedRole, removeAllowedRole, listAllowedRoles } from '../middleware/permissions.js';
 import { KeyPool } from '../../keys/keyPool.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
+import { config } from '../../config.js';
 import type { CommandHandler } from './types.js';
 
 export function createAdminCommand(
@@ -69,6 +70,14 @@ export function createAdminCommand(
       )
       .addSubcommand((sub) =>
         sub.setName('roles').setDescription('List allowed roles (empty = everyone)'),
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName('setgittoken')
+          .setDescription('Set the GitHub token for private repo access')
+          .addStringOption((opt) =>
+            opt.setName('token').setDescription('GitHub personal access token (ghp_...)').setRequired(true),
+          ),
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
@@ -170,6 +179,16 @@ export function createAdminCommand(
           content: removed
             ? `Role **${role.name}** removed.${note}`
             : `Role **${role.name}** was not in the allowed list.`,
+          ephemeral: true,
+        });
+      }
+
+      if (subcommand === 'setgittoken') {
+        const token = interaction.options.getString('token', true);
+        config.set('GITHUB_TOKEN', token);
+        const masked = token.slice(0, 6) + '...' + token.slice(-4);
+        await interaction.reply({
+          content: `GitHub token set: \`${masked}\`. It will be used for all future repo fetches.`,
           ephemeral: true,
         });
       }
