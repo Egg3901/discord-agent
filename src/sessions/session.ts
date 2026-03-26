@@ -8,6 +8,7 @@ export interface Session {
   channelId: string;
   messages: ConversationMessage[];
   repoContext?: RepoContext;
+  modelOverride?: string;
   createdAt: number;
   lastActiveAt: number;
 }

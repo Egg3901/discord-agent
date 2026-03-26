@@ -88,7 +88,7 @@ export function createCodeCommand(
         let fullResponse = '';
         for await (const chunk of anthropicClient.streamResponse(
           session.messages,
-          session.repoContext,
+          { repoContext: session.repoContext, modelOverride: session.modelOverride },
         )) {
           fullResponse += chunk;
           await streamer.push(chunk);

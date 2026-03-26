@@ -4,10 +4,12 @@ import { logger } from '../utils/logger.js';
 
 const STREAM_FLUSH_INTERVAL_MS = 1500;
 const DISCORD_RATE_LIMIT_BUFFER_MS = 1200;
+const TYPING_INTERVAL_MS = 8000;
+const PROGRESS_DOTS_INTERVAL_MS = 3000;
 
 /**
  * Streams Claude's response into a Discord thread/channel,
- * handling chunking and Discord rate limits.
+ * handling chunking, Discord rate limits, and live progress updates.
  */
 export class ResponseStreamer {
   private buffer = '';
@@ -15,6 +17,11 @@ export class ResponseStreamer {
   private currentMessage: Message | null = null;
   private lastEditTime = 0;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private typingTimer: ReturnType<typeof setInterval> | null = null;
+  private progressTimer: ReturnType<typeof setInterval> | null = null;
+  private dotCount = 0;
+  private firstTokenReceived = false;
+  private startTime = Date.now();
 
   constructor(
     private channel: TextChannel | ThreadChannel,
@@ -23,12 +30,43 @@ export class ResponseStreamer {
     if (initialMessage) {
       this.currentMessage = initialMessage;
     }
+
+    // Keep typing indicator alive while waiting for response
+    this.typingTimer = setInterval(() => {
+      this.channel.sendTyping().catch(() => {});
+    }, TYPING_INTERVAL_MS);
+
+    // Animate the "Thinking..." message while waiting for first token
+    this.progressTimer = setInterval(async () => {
+      if (!this.firstTokenReceived && this.currentMessage) {
+        this.dotCount = (this.dotCount + 1) % 4;
+        const dots = '.'.repeat(this.dotCount || 1);
+        const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+        const status = elapsed > 5
+          ? `Thinking${dots} (${elapsed}s)`
+          : `Thinking${dots}`;
+        try {
+          await this.currentMessage.edit(status);
+        } catch {
+          // Ignore edit failures during animation
+        }
+      }
+    }, PROGRESS_DOTS_INTERVAL_MS);
   }
 
   /**
    * Feed a token/chunk from the stream into the formatter.
    */
   async push(text: string): Promise<void> {
+    if (!this.firstTokenReceived) {
+      this.firstTokenReceived = true;
+      // Stop the progress animation once we have content
+      if (this.progressTimer) {
+        clearInterval(this.progressTimer);
+        this.progressTimer = null;
+      }
+    }
+
     this.buffer += text;
 
     // Periodically update the current message with buffered content
@@ -42,11 +80,7 @@ export class ResponseStreamer {
    * Called when the stream is complete. Sends any remaining content.
    */
   async finish(): Promise<Message[]> {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
-
+    this.stopTimers();
     await this.flushBuffer(true);
     return this.sentMessages;
   }
@@ -55,11 +89,27 @@ export class ResponseStreamer {
    * Send an error message.
    */
   async sendError(error: string): Promise<void> {
-    const content = `⚠️ ${error}`;
+    this.stopTimers();
+    const content = `Something went wrong: ${error}`;
     if (this.currentMessage && this.sentMessages.length === 0) {
       await this.currentMessage.edit(content);
     } else {
       await this.channel.send(content);
+    }
+  }
+
+  private stopTimers(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (this.typingTimer) {
+      clearInterval(this.typingTimer);
+      this.typingTimer = null;
+    }
+    if (this.progressTimer) {
+      clearInterval(this.progressTimer);
+      this.progressTimer = null;
     }
   }
 
@@ -80,8 +130,6 @@ export class ResponseStreamer {
       this.buffer = '';
 
       for (let i = 0; i < chunks.length; i++) {
-        const isFinalChunk = final && i === chunks.length - 1;
-
         if (i === 0) {
           await this.editOrSend(chunks[i]);
         } else {
@@ -90,11 +138,6 @@ export class ResponseStreamer {
           const msg = await this.channel.send(chunks[i]);
           this.sentMessages.push(msg);
           this.currentMessage = msg;
-        }
-
-        if (!isFinalChunk && !final && i === chunks.length - 1) {
-          // Keep the last incomplete chunk in the buffer
-          // Actually, since we split the full buffer, all chunks are final
         }
       }
     }

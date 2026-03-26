@@ -9,6 +9,11 @@ export interface ConversationMessage {
   content: string;
 }
 
+export interface StreamOptions {
+  repoContext?: RepoContext;
+  modelOverride?: string;
+}
+
 export class AnthropicClient {
   constructor(private keyPool: KeyPool) {}
 
@@ -17,18 +22,21 @@ export class AnthropicClient {
    */
   async *streamResponse(
     messages: ConversationMessage[],
-    repoContext?: RepoContext,
+    options: StreamOptions = {},
   ): AsyncGenerator<string> {
-    const systemPrompt = buildSystemPrompt(repoContext);
+    const systemPrompt = buildSystemPrompt(options.repoContext);
     const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
+    const model = options.modelOverride || config.ANTHROPIC_MODEL;
 
     const { key, release } = await this.keyPool.acquire();
 
     try {
       const client = new Anthropic({ apiKey: key.apiKey });
 
+      logger.debug({ model, keyId: key.id }, 'Starting Claude stream');
+
       const stream = await client.messages.create({
-        model: config.ANTHROPIC_MODEL,
+        model,
         max_tokens: 4096,
         system: systemPrompt,
         messages: trimmed,
@@ -46,7 +54,7 @@ export class AnthropicClient {
 
       release(true);
     } catch (err) {
-      logger.error({ err, keyId: key.id }, 'Anthropic API error');
+      logger.error({ err, keyId: key.id, model }, 'Anthropic API error');
       release(false);
       throw err;
     }
@@ -57,10 +65,10 @@ export class AnthropicClient {
    */
   async getResponse(
     messages: ConversationMessage[],
-    repoContext?: RepoContext,
+    options: StreamOptions = {},
   ): Promise<string> {
     const chunks: string[] = [];
-    for await (const chunk of this.streamResponse(messages, repoContext)) {
+    for await (const chunk of this.streamResponse(messages, options)) {
       chunks.push(chunk);
     }
     return chunks.join('');

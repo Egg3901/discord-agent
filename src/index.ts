@@ -10,6 +10,9 @@ import { createCodeCommand } from './bot/commands/code.js';
 import { createSessionCommand } from './bot/commands/session.js';
 import { createAdminCommand } from './bot/commands/admin.js';
 import { createRepoCommand } from './bot/commands/repo.js';
+import { createConfigCommand } from './bot/commands/config.js';
+import { createModelCommand } from './bot/commands/model.js';
+import { createHelpCommand } from './bot/commands/help.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AnthropicClient } from './claude/anthropicClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
@@ -25,7 +28,7 @@ async function main() {
   getDatabase();
 
   // Initialize core services
-  const keyPool = new KeyPool(config.ANTHROPIC_API_KEYS);
+  const keyPool = new KeyPool(config.INITIAL_API_KEYS);
   const anthropicClient = new AnthropicClient(keyPool);
   const sessionManager = new SessionManager();
   const rateLimiter = new RateLimiter();
@@ -38,6 +41,9 @@ async function main() {
     createSessionCommand(sessionManager),
     createAdminCommand(keyPool, sessionManager),
     createRepoCommand(sessionManager, repoFetcher),
+    createConfigCommand(),
+    createModelCommand(sessionManager),
+    createHelpCommand(),
   ];
 
   const commandMap = new Map<string, CommandHandler>();
