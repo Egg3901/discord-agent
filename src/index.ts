@@ -20,7 +20,7 @@ import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
 import { RateLimiter } from './bot/middleware/rateLimiter.js';
 import { RepoFetcher } from './github/repoFetcher.js';
-import { getDatabase, closeDatabase } from './storage/database.js';
+import { getDatabase, closeDatabase, loadConfigValues } from './storage/database.js';
 import type { CommandHandler } from './bot/commands/types.js';
 
 async function main() {
@@ -28,6 +28,9 @@ async function main() {
 
   // Initialize database
   getDatabase();
+
+  // Restore persisted config values (tokens, settings set via /config or /admin)
+  config.restoreFromDb(loadConfigValues());
 
   // Initialize core services
   const keyPool = new KeyPool(config.INITIAL_API_KEYS);

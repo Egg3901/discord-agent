@@ -196,7 +196,7 @@ export class DevToolExecutor {
       const askpassPath = join(this.sandboxDir, '.git-askpass.sh');
       await writeFile(
         askpassPath,
-        '#!/bin/sh\necho "$GIT_AUTH_TOKEN"\n',
+        '#!/bin/sh\ncase "$1" in\n  *sername*) echo "x-access-token" ;;\n  *) echo "$GIT_AUTH_TOKEN" ;;\nesac\n',
         { mode: 0o700 },
       );
 

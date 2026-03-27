@@ -58,6 +58,12 @@ function runMigrations(db: Database.Database): void {
       added_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS bot_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_thread_id ON sessions(thread_id);
     CREATE INDEX IF NOT EXISTS idx_usage_log_user_id ON usage_log(user_id);
@@ -148,6 +154,25 @@ export function getUsageSummary(userId?: string, sinceDaysAgo: number = 30): Usa
     totalCostUsd: totals.total_cost_usd,
     models,
   };
+}
+
+export function saveConfigValue(key: string, value: string): void {
+  const db = getDatabase();
+  db.prepare(`
+    INSERT INTO bot_config (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(key, value, Date.now());
+}
+
+export function loadConfigValues(): Record<string, string> {
+  const db = getDatabase();
+  const rows = db.prepare('SELECT key, value FROM bot_config').all() as { key: string; value: string }[];
+  const result: Record<string, string> = {};
+  for (const row of rows) {
+    result[row.key] = row.value;
+  }
+  return result;
 }
 
 export function closeDatabase(): void {
