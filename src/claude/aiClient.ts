@@ -285,40 +285,62 @@ export class AIClient {
       return;
     }
 
-    // Build CLI args
-    const cliArgs = [
-      '-p',
-      '--output-format', 'stream-json',
-      '--verbose',
-      '--dangerously-skip-permissions',
-      '--bare',  // Skip hooks, CLAUDE.md, and local config
-    ];
+    // Acquire an Anthropic API key from the pool for Claude Code CLI auth
+    const hasAnthropicKeys = this.keyPool.hasKeysForProvider('anthropic');
+    let apiKey: string | undefined;
+    let releaseKey: ((success: boolean) => void) | undefined;
 
-    // Resume previous Claude Code session if available (for conversation continuity)
-    const sessionKey = options.repoContext?.repoUrl || 'default';
-    const existingSessionId = this.claudeCodeSessions.get(sessionKey);
-    if (existingSessionId) {
-      cliArgs.push('--resume', existingSessionId);
+    if (hasAnthropicKeys) {
+      const acquired = await this.keyPool.acquire('anthropic', options.onQueuePosition);
+      apiKey = acquired.key.apiKey;
+      releaseKey = acquired.release;
     }
 
-    cliArgs.push(prompt);
+    try {
+      // Build CLI args
+      const cliArgs = [
+        '-p',
+        '--output-format', 'stream-json',
+        '--verbose',
+        '--dangerously-skip-permissions',
+        '--bare',  // Skip hooks, CLAUDE.md, and local config
+      ];
 
-    logger.debug({ provider: 'claude-code', sessionKey, resume: !!existingSessionId }, 'Starting Claude Code stream');
+      // Resume previous Claude Code session if available (for conversation continuity)
+      const sessionKey = options.repoContext?.repoUrl || 'default';
+      const existingSessionId = this.claudeCodeSessions.get(sessionKey);
+      if (existingSessionId) {
+        cliArgs.push('--resume', existingSessionId);
+      }
 
-    yield* this.spawnClaudeCodeProcess(cliArgs, sessionKey);
+      cliArgs.push(prompt);
+
+      // Pass API key via environment variable so CLI can authenticate
+      const env = { ...process.env };
+      if (apiKey) {
+        env.ANTHROPIC_API_KEY = apiKey;
+      }
+
+      logger.debug({ provider: 'claude-code', sessionKey, resume: !!existingSessionId, hasApiKey: !!apiKey }, 'Starting Claude Code stream');
+
+      yield* this.spawnClaudeCodeProcess(cliArgs, sessionKey, env);
+      releaseKey?.(true);
+    } catch (err) {
+      releaseKey?.(false);
+      throw err;
+    }
   }
 
   private async *spawnClaudeCodeProcess(
     cliArgs: string[],
     sessionKey: string,
+    env: Record<string, string | undefined>,
   ): AsyncGenerator<AIStreamEvent> {
     const proc: ChildProcess = spawn('claude', cliArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env,
     });
 
-    let buffer = '';
-    let resultText = '';
     let hasYieldedText = false;
 
     // Create async iterable from stdout
