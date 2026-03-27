@@ -1,6 +1,7 @@
 import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
+  type AutocompleteInteraction,
 } from 'discord.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { RepoFetcher } from '../../github/repoFetcher.js';
@@ -19,7 +20,8 @@ export function createRepoCommand(
         opt
           .setName('url')
           .setDescription('GitHub repository URL (e.g. https://github.com/owner/repo)')
-          .setRequired(true),
+          .setRequired(true)
+          .setAutocomplete(true),
       )
       .addStringOption((opt) =>
         opt
@@ -27,6 +29,22 @@ export function createRepoCommand(
           .setDescription('Comma-separated file paths to focus on (optional)')
           .setRequired(false),
       ),
+
+    async autocomplete(interaction: AutocompleteInteraction) {
+      const focused = interaction.options.getFocused();
+      try {
+        const repos = await repoFetcher.listUserRepos(focused || undefined);
+        await interaction.respond(
+          repos.map((r) => ({
+            name: `${r.fullName}${r.isPrivate ? ' 🔒' : ''}${r.description ? ` — ${r.description}` : ''}`.slice(0, 100),
+            value: `https://github.com/${r.fullName}`,
+          })),
+        );
+      } catch (err) {
+        logger.warn({ err }, 'Repo autocomplete failed');
+        await interaction.respond([]);
+      }
+    },
 
     async execute(interaction: ChatInputCommandInteraction) {
       const threadId = interaction.channelId;

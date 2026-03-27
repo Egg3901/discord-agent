@@ -75,6 +75,7 @@ Use these to:
 - Clone repos and install dependencies
 - Build projects and run tests to verify changes
 - Use git to inspect history, create branches, and commit changes
+- Push and pull from GitHub remotes (requires GITHUB_TOKEN to be configured)
 - Run any CLI tool available in the environment`;
   }
 

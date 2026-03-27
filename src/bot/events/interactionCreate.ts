@@ -7,6 +7,20 @@ export function handleInteractionCreate(
   commands: Map<string, CommandHandler>,
 ): void {
   client.on('interactionCreate', async (interaction: Interaction) => {
+    // Handle autocomplete interactions
+    if (interaction.isAutocomplete()) {
+      const handler = commands.get(interaction.commandName);
+      if (handler?.autocomplete) {
+        try {
+          await handler.autocomplete(interaction);
+        } catch (err) {
+          logger.warn({ err, command: interaction.commandName }, 'Autocomplete error');
+          await interaction.respond([]).catch(() => {});
+        }
+      }
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     const handler = commands.get(interaction.commandName);

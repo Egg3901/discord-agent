@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { nanoid } from 'nanoid';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -72,8 +73,12 @@ export interface StreamOptions {
  * Model-to-provider mapping.
  */
 const GOOGLE_MODEL_PREFIXES = ['gemini-'];
+const CLAUDE_CODE_MODEL = 'claude-code';
 
 export function getProviderForModel(model: string): Provider {
+  if (model === CLAUDE_CODE_MODEL || model.startsWith('claude-code-')) {
+    return 'claude-code';
+  }
   if (GOOGLE_MODEL_PREFIXES.some((p) => model.startsWith(p))) {
     return 'google';
   }
@@ -110,7 +115,9 @@ export class AIClient {
     const model = options.modelOverride || config.ANTHROPIC_MODEL;
     const provider = getProviderForModel(model);
 
-    if (provider === 'google') {
+    if (provider === 'claude-code') {
+      yield* this.streamClaudeCode(messages, model, options);
+    } else if (provider === 'google') {
       yield* this.streamGemini(messages, model, options);
     } else {
       yield* this.streamAnthropic(messages, model, options);
@@ -241,6 +248,191 @@ export class AIClient {
       logger.error({ err, keyId: key.id, model }, 'Anthropic API error');
       release(false);
       throw err;
+    }
+  }
+
+  // --- Claude Code (CLI subprocess) ---
+
+  /** Map of session thread IDs to Claude Code session IDs for conversation continuity. */
+  private claudeCodeSessions = new Map<string, string>();
+
+  private async *streamClaudeCode(
+    messages: ConversationMessage[],
+    _model: string,
+    options: StreamOptions,
+  ): AsyncGenerator<AIStreamEvent> {
+    // Extract the last user message as the prompt
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+    if (!lastUserMsg) {
+      yield { type: 'text', text: 'No user message found.' } as TextChunkEvent;
+      yield { type: 'stop', stopReason: 'end_turn' } as StopEvent;
+      return;
+    }
+
+    let prompt: string;
+    if (typeof lastUserMsg.content === 'string') {
+      prompt = lastUserMsg.content;
+    } else {
+      prompt = lastUserMsg.content
+        .filter((b): b is TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n');
+    }
+
+    if (!prompt.trim()) {
+      yield { type: 'text', text: 'Empty prompt.' } as TextChunkEvent;
+      yield { type: 'stop', stopReason: 'end_turn' } as StopEvent;
+      return;
+    }
+
+    // Build CLI args
+    const cliArgs = [
+      '-p',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--dangerously-skip-permissions',
+      '--bare',  // Skip hooks, CLAUDE.md, and local config
+    ];
+
+    // Resume previous Claude Code session if available (for conversation continuity)
+    const sessionKey = options.repoContext?.repoUrl || 'default';
+    const existingSessionId = this.claudeCodeSessions.get(sessionKey);
+    if (existingSessionId) {
+      cliArgs.push('--resume', existingSessionId);
+    }
+
+    cliArgs.push(prompt);
+
+    logger.debug({ provider: 'claude-code', sessionKey, resume: !!existingSessionId }, 'Starting Claude Code stream');
+
+    yield* this.spawnClaudeCodeProcess(cliArgs, sessionKey);
+  }
+
+  private async *spawnClaudeCodeProcess(
+    cliArgs: string[],
+    sessionKey: string,
+  ): AsyncGenerator<AIStreamEvent> {
+    const proc: ChildProcess = spawn('claude', cliArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+
+    let buffer = '';
+    let resultText = '';
+    let hasYieldedText = false;
+
+    // Create async iterable from stdout
+    const events = this.parseClaudeCodeStream(proc, sessionKey);
+
+    for await (const event of events) {
+      if (event.type === 'text') hasYieldedText = true;
+      yield event;
+    }
+
+    if (!hasYieldedText) {
+      yield { type: 'text', text: '(No response from Claude Code)' } as TextChunkEvent;
+    }
+    yield { type: 'stop', stopReason: 'end_turn' } as StopEvent;
+  }
+
+  private async *parseClaudeCodeStream(
+    proc: ChildProcess,
+    sessionKey: string,
+  ): AsyncGenerator<AIStreamEvent> {
+    let buffer = '';
+
+    // Collect all data into a promise-based async iteration
+    const lines: string[] = [];
+    let resolveNext: ((done: boolean) => void) | null = null;
+
+    proc.stdout!.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString();
+      const parts = buffer.split('\n');
+      buffer = parts.pop() || '';
+      for (const line of parts) {
+        if (line.trim()) lines.push(line.trim());
+      }
+      if (resolveNext) {
+        const r = resolveNext;
+        resolveNext = null;
+        r(false);
+      }
+    });
+
+    let exited = false;
+    proc.on('close', () => {
+      exited = true;
+      // Process remaining buffer
+      if (buffer.trim()) {
+        lines.push(buffer.trim());
+        buffer = '';
+      }
+      if (resolveNext) {
+        const r = resolveNext;
+        resolveNext = null;
+        r(true);
+      }
+    });
+
+    proc.stderr!.on('data', (chunk: Buffer) => {
+      logger.debug({ stderr: chunk.toString() }, 'Claude Code stderr');
+    });
+
+    while (true) {
+      while (lines.length > 0) {
+        const line = lines.shift()!;
+        try {
+          const msg = JSON.parse(line);
+          const event = this.handleClaudeCodeMessage(msg, sessionKey);
+          if (event) yield event;
+        } catch {
+          // Not valid JSON, skip
+        }
+      }
+
+      if (exited) break;
+
+      // Wait for more data
+      await new Promise<boolean>((resolve) => {
+        resolveNext = resolve;
+      });
+    }
+  }
+
+  private handleClaudeCodeMessage(
+    msg: any,
+    sessionKey: string,
+  ): AIStreamEvent | null {
+    switch (msg.type) {
+      case 'system':
+        if (msg.subtype === 'init' && msg.session_id) {
+          this.claudeCodeSessions.set(sessionKey, msg.session_id);
+          logger.debug({ sessionId: msg.session_id }, 'Claude Code session initialized');
+        }
+        return null;
+
+      case 'assistant': {
+        // Extract text from content blocks
+        const content = msg.message?.content;
+        if (!Array.isArray(content)) return null;
+
+        const textParts = content
+          .filter((b: any) => b.type === 'text' && b.text)
+          .map((b: any) => b.text);
+
+        if (textParts.length > 0) {
+          return { type: 'text', text: textParts.join('') } as TextChunkEvent;
+        }
+        return null;
+      }
+
+      case 'result':
+        // The result event contains the final combined text, but we already
+        // streamed it via assistant messages, so skip to avoid duplication.
+        return null;
+
+      default:
+        return null;
     }
   }
 

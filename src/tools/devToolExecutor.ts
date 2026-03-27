@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -63,8 +63,11 @@ export class DevToolExecutor {
       return 'Error: git args too long (max 1000 chars)';
     }
 
+    // Configure git credential helper when GITHUB_TOKEN is available
+    const extraEnv = await this.getGitCredentialEnv();
+
     // Split args for spawn — use shell to handle quoting
-    return this.exec('bash', ['-c', `git ${args}`], GIT_TIMEOUT_MS);
+    return this.exec('bash', ['-c', `git ${args}`], GIT_TIMEOUT_MS, extraEnv);
   }
 
   private async buildProject(input: Record<string, unknown>): Promise<string> {
@@ -177,7 +180,38 @@ export class DevToolExecutor {
     }
   }
 
-  private exec(cmd: string, args: string[], timeoutMs: number): Promise<string> {
+  /**
+   * Build environment variables for git credential authentication.
+   * When GITHUB_TOKEN is available, creates a GIT_ASKPASS script that
+   * provides the token for HTTPS git operations (push, pull, clone).
+   * The token is passed via environment variable to avoid writing it to disk.
+   */
+  private async getGitCredentialEnv(): Promise<Record<string, string>> {
+    if (!config.GITHUB_TOKEN) return {};
+
+    try {
+      // Create a minimal askpass script that reads the token from an env var.
+      // Git calls this for both username and password prompts — return the
+      // token for both (GitHub accepts the token as the password with any username).
+      const askpassPath = join(this.sandboxDir, '.git-askpass.sh');
+      await writeFile(
+        askpassPath,
+        '#!/bin/sh\necho "$GIT_AUTH_TOKEN"\n',
+        { mode: 0o700 },
+      );
+
+      return {
+        GIT_ASKPASS: askpassPath,
+        GIT_AUTH_TOKEN: config.GITHUB_TOKEN,
+        GIT_TERMINAL_PROMPT: '0',
+      };
+    } catch (err) {
+      logger.warn({ err }, 'Failed to set up git credentials');
+      return {};
+    }
+  }
+
+  private exec(cmd: string, args: string[], timeoutMs: number, extraEnv: Record<string, string> = {}): Promise<string> {
     return new Promise((resolve) => {
       let stdout = '';
       let stderr = '';
@@ -191,6 +225,7 @@ export class DevToolExecutor {
         env: {
           ...process.env,
           HOME: this.sandboxDir,
+          ...extraEnv,
         },
       });
 
