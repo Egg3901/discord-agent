@@ -47,6 +47,10 @@ class Config {
   // when the bot runs as a different user (e.g. systemd service).
   CLAUDE_CODE_HOME: string | null = process.env['CLAUDE_CODE_HOME'] || null;
 
+  // Web search (Brave Search API)
+  ENABLE_WEB_SEARCH = process.env['ENABLE_WEB_SEARCH'] === 'true';
+  BRAVE_SEARCH_API_KEY: string | null = process.env['BRAVE_SEARCH_API_KEY'] || null;
+
   // Access control: managed via /admin allowrole and stored in database
   // Empty = everyone can use the bot
 
@@ -77,6 +81,8 @@ class Config {
     SCRIPT_TIMEOUT_MS: { type: 'number', description: 'Script execution timeout in milliseconds' },
     ENABLE_DEV_TOOLS: { type: 'string', description: 'Enable terminal, git, and build tools (true/false)' },
     CLAUDE_CODE_HOME: { type: 'string', description: 'HOME directory for Claude Code CLI login (e.g. /home/myuser)' },
+    ENABLE_WEB_SEARCH: { type: 'string', description: 'Enable web search and fetch tools (true/false)' },
+    BRAVE_SEARCH_API_KEY: { type: 'string', description: 'Brave Search API key for web search tool' },
   };
 
   /**
@@ -95,7 +101,7 @@ class Config {
         return { success: false, error: `\`${key}\` must be a positive number.` };
       }
       (this as any)[key] = num;
-    } else if (key === 'ENABLE_EXTENDED_THINKING' || key === 'ENABLE_SCRIPT_EXECUTION' || key === 'ENABLE_DEV_TOOLS') {
+    } else if (key === 'ENABLE_EXTENDED_THINKING' || key === 'ENABLE_SCRIPT_EXECUTION' || key === 'ENABLE_DEV_TOOLS' || key === 'ENABLE_WEB_SEARCH') {
       if (value !== 'true' && value !== 'false') {
         return { success: false, error: `\`${key}\` must be 'true' or 'false'.` };
       }
@@ -127,7 +133,7 @@ class Config {
       if (meta.type === 'number') {
         const num = parseInt(value, 10);
         if (!isNaN(num) && num > 0) (this as any)[key] = num;
-      } else if (key === 'ENABLE_EXTENDED_THINKING' || key === 'ENABLE_SCRIPT_EXECUTION' || key === 'ENABLE_DEV_TOOLS') {
+      } else if (key === 'ENABLE_EXTENDED_THINKING' || key === 'ENABLE_SCRIPT_EXECUTION' || key === 'ENABLE_DEV_TOOLS' || key === 'ENABLE_WEB_SEARCH') {
         (this as any)[key] = value === 'true';
       } else {
         (this as any)[key] = value;

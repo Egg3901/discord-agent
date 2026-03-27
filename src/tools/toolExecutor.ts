@@ -1,6 +1,7 @@
 import { RepoFetcher } from '../github/repoFetcher.js';
 import { executeScript, sandboxWriteFile, sandboxReadFile, sandboxListFiles, getSandboxDir } from './scriptExecutor.js';
 import { DevToolExecutor } from './devToolExecutor.js';
+import { webSearch, webFetch } from './webSearchExecutor.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
@@ -10,6 +11,7 @@ const MAX_QUERY_LENGTH = 200;
 const MAX_SCRIPT_LENGTH = 50_000;
 
 const DEV_TOOL_NAMES = new Set(['run_terminal', 'git_command', 'build_project']);
+const WEB_TOOL_NAMES = new Set(['web_search', 'web_fetch']);
 
 export class ToolExecutor {
   private sandboxDir: string | null = null;
@@ -54,6 +56,26 @@ export class ToolExecutor {
         const result = await this.devExecutor.execute(toolName, input);
         const duration = Date.now() - startTime;
         logger.debug({ toolName, duration }, 'Dev tool executed');
+        return result;
+      }
+
+      // Route web tools
+      if (WEB_TOOL_NAMES.has(toolName)) {
+        if (!config.ENABLE_WEB_SEARCH) {
+          return 'Error: Web search is disabled. An admin can enable it with `/config set ENABLE_WEB_SEARCH true`.';
+        }
+        let result: string;
+        if (toolName === 'web_search') {
+          const query = input.query;
+          if (typeof query !== 'string' || query.length === 0) return 'Error: query must be a non-empty string';
+          result = await webSearch(query);
+        } else {
+          const url = input.url;
+          if (typeof url !== 'string' || url.length === 0) return 'Error: url must be a non-empty string';
+          result = await webFetch(url);
+        }
+        const duration = Date.now() - startTime;
+        logger.debug({ toolName, duration }, 'Web tool executed');
         return result;
       }
 

@@ -13,4 +13,11 @@ export interface Session {
   repoName?: string;
   createdAt: number;
   lastActiveAt: number;
+
+  // Per-session thinking override (null = use global config)
+  thinkingEnabled?: boolean | null;
+  thinkingBudget?: number | null;
+
+  // Abort controller for cancelling in-flight requests
+  activeController?: AbortController;
 }
