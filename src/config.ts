@@ -35,6 +35,10 @@ class Config {
   THINKING_BUDGET_TOKENS = parseInt(optional('THINKING_BUDGET_TOKENS', '10000'), 10);
   MAX_AGENT_ITERATIONS = parseInt(optional('MAX_AGENT_ITERATIONS', '10'), 10);
 
+  // Script execution
+  ENABLE_SCRIPT_EXECUTION = process.env['ENABLE_SCRIPT_EXECUTION'] === 'true';
+  SCRIPT_TIMEOUT_MS = parseInt(optional('SCRIPT_TIMEOUT_MS', '30000'), 10);
+
   // Access control: managed via /admin allowrole and stored in database
   // Empty = everyone can use the bot
 
@@ -61,6 +65,8 @@ class Config {
     ENABLE_EXTENDED_THINKING: { type: 'string', description: 'Enable extended thinking for complex tasks (true/false)' },
     THINKING_BUDGET_TOKENS: { type: 'number', description: 'Token budget for extended thinking' },
     MAX_AGENT_ITERATIONS: { type: 'number', description: 'Max tool-use iterations per agent loop' },
+    ENABLE_SCRIPT_EXECUTION: { type: 'string', description: 'Enable sandboxed script execution tool (true/false)' },
+    SCRIPT_TIMEOUT_MS: { type: 'number', description: 'Script execution timeout in milliseconds' },
   };
 
   /**
@@ -78,7 +84,7 @@ class Config {
         return { success: false, error: `\`${key}\` must be a positive number.` };
       }
       (this as any)[key] = num;
-    } else if (key === 'ENABLE_EXTENDED_THINKING') {
+    } else if (key === 'ENABLE_EXTENDED_THINKING' || key === 'ENABLE_SCRIPT_EXECUTION') {
       if (value !== 'true' && value !== 'false') {
         return { success: false, error: `\`${key}\` must be 'true' or 'false'.` };
       }

@@ -37,6 +37,11 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 > \`/config set <key> <value>\` — Set a config value (values never displayed)
 > \`/config list\` — Show settable config keys
 
+**Code Execution Sandbox:**
+• When enabled, the bot can run scripts, write/read files, and build multi-file projects in an isolated workspace
+• Supports Python, JavaScript, TypeScript, Bash, Ruby, and Perl
+• Enable with \`/config set ENABLE_SCRIPT_EXECUTION true\`
+
 **Tips:**
 • Attach code files (.ts, .py, .js, etc.) to messages — they're included as context
 • Responses stream in real-time with progress updates

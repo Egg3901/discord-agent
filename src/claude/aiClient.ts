@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
 import { buildSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
-import { AGENT_TOOLS, toGeminiFunctionDeclarations } from '../tools/toolDefinitions.js';
+import { AGENT_TOOLS, SANDBOX_TOOLS, toGeminiFunctionDeclarations } from '../tools/toolDefinitions.js';
 import type { Provider } from '../keys/types.js';
 
 // --- Content block types (provider-agnostic) ---
@@ -65,6 +65,7 @@ export interface StreamOptions {
   modelOverride?: string;
   onQueuePosition?: (position: number) => void;
   enableTools?: boolean;
+  enableRepoTools?: boolean;
 }
 
 /**
@@ -77,6 +78,20 @@ export function getProviderForModel(model: string): Provider {
     return 'google';
   }
   return 'anthropic';
+}
+
+/**
+ * Build the tool list based on what's available (repo tools, script tool).
+ */
+function getActiveTools(options: StreamOptions): import('../tools/toolDefinitions.js').ToolDefinition[] {
+  const tools = [];
+  if (options.enableRepoTools) {
+    tools.push(...AGENT_TOOLS);
+  }
+  if (config.ENABLE_SCRIPT_EXECUTION) {
+    tools.push(...SANDBOX_TOOLS);
+  }
+  return tools;
 }
 
 export class AIClient {
@@ -131,7 +146,7 @@ export class AIClient {
     model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableTools);
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION);
     const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
 
     // Convert messages to Anthropic format
@@ -156,7 +171,10 @@ export class AIClient {
       };
 
       if (options.enableTools) {
-        params.tools = AGENT_TOOLS;
+        const tools = getActiveTools(options);
+        if (tools.length > 0) {
+          params.tools = tools;
+        }
       }
 
       if (useThinking) {
@@ -230,7 +248,7 @@ export class AIClient {
     model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableTools);
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION);
     const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
 
     const { key, release } = await this.keyPool.acquire('google', options.onQueuePosition);
@@ -248,7 +266,10 @@ export class AIClient {
       };
 
       if (options.enableTools) {
-        geminiConfig.tools = [{ functionDeclarations: toGeminiFunctionDeclarations(AGENT_TOOLS) }];
+        const tools = getActiveTools(options);
+        if (tools.length > 0) {
+          geminiConfig.tools = [{ functionDeclarations: toGeminiFunctionDeclarations(tools) }];
+        }
       }
 
       if (config.ENABLE_EXTENDED_THINKING) {

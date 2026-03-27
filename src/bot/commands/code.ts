@@ -15,6 +15,7 @@ import { logger } from '../../utils/logger.js';
 import { RepoFetcher } from '../../github/repoFetcher.js';
 import { ToolExecutor } from '../../tools/toolExecutor.js';
 import { runAgentLoop } from '../../claude/agentLoop.js';
+import { config } from '../../config.js';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
 
@@ -134,9 +135,17 @@ export function createCodeCommand(
         const streamer = new ResponseStreamer(thread, thinkingMsg);
 
         try {
-          if (repoOwner && repoName) {
+          const hasRepo = repoOwner && repoName;
+          const hasTools = hasRepo || config.ENABLE_SCRIPT_EXECUTION;
+
+          if (hasTools) {
             // Agentic mode
-            const toolExecutor = new ToolExecutor(repoFetcher, repoOwner, repoName);
+            const toolExecutor = new ToolExecutor(
+              hasRepo ? repoFetcher : null,
+              repoOwner || '',
+              repoName || '',
+              session.id,
+            );
             const result = await runAgentLoop(
               aiClient,
               session.messages,
@@ -144,6 +153,7 @@ export function createCodeCommand(
               {
                 repoContext: session.repoContext,
                 modelOverride: session.modelOverride,
+                enableRepoTools: !!hasRepo,
                 onQueuePosition: (pos) => {
                   thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
                 },
