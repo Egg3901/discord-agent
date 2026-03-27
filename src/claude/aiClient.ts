@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
 import { buildSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
-import { AGENT_TOOLS, toGeminiFunctionDeclarations, type ToolDefinition } from '../tools/toolDefinitions.js';
+import { AGENT_TOOLS, toGeminiFunctionDeclarations } from '../tools/toolDefinitions.js';
 import type { Provider } from '../keys/types.js';
 
 // --- Content block types (provider-agnostic) ---
@@ -239,11 +239,8 @@ export class AIClient {
       const genai = new GoogleGenAI({ apiKey: key.apiKey });
       logger.debug({ model, keyId: key.id, provider: 'google' }, 'Starting stream');
 
-      // Convert messages to Gemini format (flatten content blocks to text)
-      const geminiContents = trimmed.map((m) => ({
-        role: m.role === 'assistant' ? ('model' as const) : ('user' as const),
-        parts: [{ text: typeof m.content === 'string' ? m.content : contentBlocksToText(m.content) }],
-      }));
+      // Convert messages to Gemini format with proper function call/result parts
+      const geminiContents = toGeminiContents(trimmed);
 
       const geminiConfig: Record<string, any> = {
         systemInstruction: systemPrompt,
@@ -266,11 +263,13 @@ export class AIClient {
         config: geminiConfig,
       });
 
+      let hasToolCalls = false;
       for await (const chunk of response) {
         // Gemini may return function calls
         const parts = (chunk as any).candidates?.[0]?.content?.parts || [];
         for (const part of parts) {
           if (part.functionCall) {
+            hasToolCalls = true;
             yield {
               type: 'tool_use',
               id: `gemini-${nanoid(12)}`,
@@ -283,7 +282,7 @@ export class AIClient {
         }
       }
 
-      yield { type: 'stop', stopReason: 'end_turn' } as StopEvent;
+      yield { type: 'stop', stopReason: hasToolCalls ? 'tool_use' : 'end_turn' } as StopEvent;
       release(true);
     } catch (err) {
       logger.error({ err, keyId: key.id, model }, 'Gemini API error');
@@ -294,16 +293,70 @@ export class AIClient {
 }
 
 /**
- * Flatten content blocks to a text string (for providers that don't support structured content).
+ * Convert conversation messages to Gemini content format.
+ * Handles function call/result blocks properly instead of flattening to text.
  */
-function contentBlocksToText(blocks: ContentBlock[]): string {
-  return blocks
-    .map((b) => {
-      if (b.type === 'text') return b.text;
-      if (b.type === 'tool_use') return `[Tool call: ${b.name}(${JSON.stringify(b.input)})]`;
-      if (b.type === 'tool_result') return `[Tool result for ${b.tool_use_id}]: ${b.content}`;
-      return '';
-    })
-    .filter(Boolean)
-    .join('\n');
+function toGeminiContents(
+  messages: { role: 'user' | 'assistant'; content: string | ContentBlock[] }[],
+): { role: 'user' | 'model'; parts: any[] }[] {
+  const contents: { role: 'user' | 'model'; parts: any[] }[] = [];
+
+  for (const m of messages) {
+    const role = m.role === 'assistant' ? 'model' as const : 'user' as const;
+
+    if (typeof m.content === 'string') {
+      contents.push({ role, parts: [{ text: m.content }] });
+      continue;
+    }
+
+    // Convert content blocks to Gemini parts
+    const parts: any[] = [];
+    for (const block of m.content) {
+      if (block.type === 'text') {
+        parts.push({ text: block.text });
+      } else if (block.type === 'tool_use') {
+        // Assistant's function call → Gemini functionCall part
+        parts.push({
+          functionCall: {
+            name: block.name,
+            args: block.input,
+          },
+        });
+      } else if (block.type === 'tool_result') {
+        // User's function result → Gemini functionResponse part
+        // Find the matching tool_use to get the function name
+        const toolName = findToolName(messages, block.tool_use_id);
+        parts.push({
+          functionResponse: {
+            name: toolName || 'unknown',
+            response: { result: block.content },
+          },
+        });
+      }
+    }
+
+    if (parts.length > 0) {
+      contents.push({ role, parts });
+    }
+  }
+
+  return contents;
+}
+
+/**
+ * Find the tool name for a given tool_use_id by searching previous messages.
+ */
+function findToolName(
+  messages: { role: 'user' | 'assistant'; content: string | ContentBlock[] }[],
+  toolUseId: string,
+): string | undefined {
+  for (const m of messages) {
+    if (typeof m.content === 'string') continue;
+    for (const block of m.content) {
+      if (block.type === 'tool_use' && block.id === toolUseId) {
+        return block.name;
+      }
+    }
+  }
+  return undefined;
 }
