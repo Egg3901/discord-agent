@@ -6,19 +6,23 @@ import {
   type ThreadChannel,
 } from 'discord.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
-import { AnthropicClient } from '../../claude/anthropicClient.js';
+import { AIClient } from '../../claude/aiClient.js';
 import { ResponseStreamer } from '../../claude/responseFormatter.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { formatApiError } from '../../utils/errors.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { logger } from '../../utils/logger.js';
+import { RepoFetcher } from '../../github/repoFetcher.js';
+import { ToolExecutor } from '../../tools/toolExecutor.js';
+import { runAgentLoop } from '../../claude/agentLoop.js';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
 
 export function createCodeCommand(
   sessionManager: SessionManager,
-  anthropicClient: AnthropicClient,
+  aiClient: AIClient,
   rateLimiter: RateLimiter,
+  repoFetcher: RepoFetcher,
 ): CommandHandler {
   return {
     data: new SlashCommandBuilder()
@@ -68,16 +72,54 @@ export function createCodeCommand(
 
         const threadName = prompt.slice(0, 95) + (prompt.length > 95 ? '...' : '');
         const thread = await (channel as TextChannel).threads.create({
-          name: `🤖 ${threadName}`,
+          name: `\u{1F916} ${threadName}`,
           autoArchiveDuration: 60,
           reason: `Coding session started by ${interaction.user.tag}`,
         });
+
+        // Parse repo if provided
+        let repoOwner: string | undefined;
+        let repoName: string | undefined;
+        let repoContext: { repoUrl: string; files: { path: string; content: string }[] } | undefined;
+
+        if (repoUrl) {
+          try {
+            const parsed = repoFetcher.parseGitHubUrl(repoUrl);
+            repoOwner = parsed.owner;
+            repoName = parsed.repo;
+
+            // When tools are available, fetch only tree listing + README for initial context
+            // instead of 20 files — the AI can read individual files on demand via tools
+            const tree = await repoFetcher.getTree(repoOwner, repoName);
+            const readmeFiles = await repoFetcher.fetchFiles(repoOwner, repoName, ['README.md', 'readme.md']);
+            repoContext = {
+              repoUrl,
+              files: [
+                { path: '[TREE]', content: tree.join('\n') },
+                ...readmeFiles,
+              ],
+            };
+          } catch (err) {
+            logger.warn({ err, repoUrl }, 'Failed to fetch repo for /code');
+            await thread.send('> Failed to load repository context. Continuing without it.');
+            repoOwner = undefined;
+            repoName = undefined;
+            repoContext = undefined;
+          }
+        }
 
         const session = sessionManager.createSession(
           interaction.user.id,
           thread.id,
           channel.id,
+          repoContext,
         );
+
+        // Set repo owner/name on session for tool executor
+        if (repoOwner && repoName) {
+          session.repoOwner = repoOwner;
+          session.repoName = repoName;
+        }
 
         sessionManager.addMessage(thread.id, {
           role: 'user',
@@ -85,33 +127,68 @@ export function createCodeCommand(
         });
 
         await interaction.editReply(
-          `Session started! Continue the conversation in <#${thread.id}>`,
+          `Session started! Continue the conversation in <#${thread.id}>${repoUrl ? ` (repo: ${repoOwner}/${repoName})` : ''}`,
         );
 
         const thinkingMsg = await thread.send('Thinking...');
         const streamer = new ResponseStreamer(thread, thinkingMsg);
 
         try {
-          let fullResponse = '';
-          for await (const chunk of anthropicClient.streamResponse(
-            session.messages,
-            {
-              repoContext: session.repoContext,
-              modelOverride: session.modelOverride,
-              onQueuePosition: (pos) => {
-                thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+          if (repoOwner && repoName) {
+            // Agentic mode
+            const toolExecutor = new ToolExecutor(repoFetcher, repoOwner, repoName);
+            const result = await runAgentLoop(
+              aiClient,
+              session.messages,
+              toolExecutor,
+              {
+                repoContext: session.repoContext,
+                modelOverride: session.modelOverride,
+                onQueuePosition: (pos) => {
+                  thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+                },
               },
-            },
-          )) {
-            fullResponse += chunk;
-            await streamer.push(chunk);
-          }
-          await streamer.finish();
+              {
+                onTextChunk: (text) => streamer.push(text),
+                onToolStart: async (name, input) => {
+                  const inputSummary = Object.entries(input)
+                    .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
+                    .join(', ');
+                  await thread.send(`> \u{1F527} \`${name}\` ${inputSummary}`);
+                },
+                onToolEnd: async () => {},
+                onThinking: async () => {},
+              },
+            );
 
-          sessionManager.addMessage(thread.id, {
-            role: 'assistant',
-            content: fullResponse,
-          });
+            await streamer.finish();
+
+            for (const msg of result.newMessages) {
+              sessionManager.addMessage(thread.id, msg);
+            }
+          } else {
+            // Simple streaming mode
+            let fullResponse = '';
+            for await (const chunk of aiClient.streamText(
+              session.messages,
+              {
+                repoContext: session.repoContext,
+                modelOverride: session.modelOverride,
+                onQueuePosition: (pos) => {
+                  thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+                },
+              },
+            )) {
+              fullResponse += chunk;
+              await streamer.push(chunk);
+            }
+            await streamer.finish();
+
+            sessionManager.addMessage(thread.id, {
+              role: 'assistant',
+              content: fullResponse,
+            });
+          }
         } catch (err) {
           logger.error({ err }, 'Error streaming in /code');
           await streamer.sendError(formatApiError(err));

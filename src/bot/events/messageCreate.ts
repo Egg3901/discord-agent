@@ -8,16 +8,20 @@ import {
 import { logger } from '../../utils/logger.js';
 import { formatApiError } from '../../utils/errors.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
-import { AnthropicClient } from '../../claude/anthropicClient.js';
+import { AIClient } from '../../claude/aiClient.js';
 import { ResponseStreamer } from '../../claude/responseFormatter.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { isAllowed } from '../middleware/permissions.js';
+import { RepoFetcher } from '../../github/repoFetcher.js';
+import { ToolExecutor } from '../../tools/toolExecutor.js';
+import { runAgentLoop } from '../../claude/agentLoop.js';
 
 export function handleMessageCreate(
   client: Client,
   sessionManager: SessionManager,
-  anthropicClient: AnthropicClient,
+  aiClient: AIClient,
   rateLimiter: RateLimiter,
+  repoFetcher: RepoFetcher,
 ): void {
   client.on('messageCreate', async (message: Message) => {
     if (message.author.bot) return;
@@ -77,27 +81,76 @@ export function handleMessageCreate(
       const streamer = new ResponseStreamer(channel, thinkingMsg);
 
       try {
-        let fullResponse = '';
-        for await (const chunk of anthropicClient.streamResponse(
-          session.messages,
-          {
-            repoContext: session.repoContext,
-            modelOverride: session.modelOverride,
-            onQueuePosition: (pos) => {
-              thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+        const hasRepo = session.repoOwner && session.repoName;
+
+        if (hasRepo) {
+          // Agentic mode: multi-step tool use loop
+          const toolExecutor = new ToolExecutor(repoFetcher, session.repoOwner!, session.repoName!);
+          const result = await runAgentLoop(
+            aiClient,
+            session.messages,
+            toolExecutor,
+            {
+              repoContext: session.repoContext,
+              modelOverride: session.modelOverride,
+              onQueuePosition: (pos) => {
+                thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+              },
             },
-          },
-        )) {
-          fullResponse += chunk;
-          await streamer.push(chunk);
+            {
+              onTextChunk: (text) => streamer.push(text),
+              onToolStart: async (name, input) => {
+                const inputSummary = Object.entries(input)
+                  .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
+                  .join(', ');
+                await channel.send(`> \u{1F527} \`${name}\` ${inputSummary}`);
+              },
+              onToolEnd: async () => {
+                // Tool completion is implicit — next iteration starts
+              },
+              onThinking: async () => {
+                // Thinking indicator is handled by the ResponseStreamer animation
+              },
+            },
+          );
+
+          await streamer.finish();
+
+          // Persist all new messages from the agent loop
+          for (const msg of result.newMessages) {
+            sessionManager.addMessage(threadId, msg);
+          }
+
+          if (result.toolCallCount > 0) {
+            logger.info(
+              { sessionId: session.id, toolCalls: result.toolCallCount, iterations: result.iterations },
+              'Agent loop completed',
+            );
+          }
+        } else {
+          // Simple streaming mode (no repo attached)
+          let fullResponse = '';
+          for await (const chunk of aiClient.streamText(
+            session.messages,
+            {
+              repoContext: session.repoContext,
+              modelOverride: session.modelOverride,
+              onQueuePosition: (pos) => {
+                thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+              },
+            },
+          )) {
+            fullResponse += chunk;
+            await streamer.push(chunk);
+          }
+
+          await streamer.finish();
+
+          sessionManager.addMessage(threadId, {
+            role: 'assistant',
+            content: fullResponse,
+          });
         }
-
-        await streamer.finish();
-
-        sessionManager.addMessage(threadId, {
-          role: 'assistant',
-          content: fullResponse,
-        });
       } catch (err) {
         logger.error({ err, sessionId: session.id }, 'Error streaming response');
         await streamer.sendError(formatApiError(err));

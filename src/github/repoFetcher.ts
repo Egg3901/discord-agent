@@ -18,6 +18,9 @@ export class RepoFetcher {
   private get octokit(): Octokit {
     return new Octokit({
       auth: config.GITHUB_TOKEN || undefined,
+      request: {
+        timeout: 15_000, // 15 second timeout per request
+      },
     });
   }
 
@@ -179,5 +182,52 @@ export class RepoFetcher {
     return tree.tree
       .filter((item) => item.type === 'blob' && item.path)
       .map((item) => item.path!);
+  }
+
+  /**
+   * List entries (files and directories) at a single directory level.
+   */
+  async listDirectory(
+    owner: string,
+    repo: string,
+    path: string,
+  ): Promise<string[]> {
+    const { data } = await this.octokit.repos.getContent({
+      owner,
+      repo,
+      path: path || '',
+    });
+
+    if (!Array.isArray(data)) {
+      return [`[file] ${(data as any).name}`];
+    }
+
+    return (data as any[]).map(
+      (entry: { name: string; type: string }) =>
+        `${entry.type === 'dir' ? '[dir]  ' : '[file] '}${entry.name}`,
+    );
+  }
+
+  /**
+   * Search for code in a repository using the GitHub code search API.
+   * Returns up to 10 matching file paths with line snippets.
+   */
+  async searchCode(
+    owner: string,
+    repo: string,
+    query: string,
+  ): Promise<{ path: string; snippet: string }[]> {
+    const { data } = await this.octokit.search.code({
+      q: `${query} repo:${owner}/${repo}`,
+      per_page: 10,
+      headers: {
+        accept: 'application/vnd.github.text-match+json',
+      },
+    });
+
+    return data.items.map((item: any) => ({
+      path: item.path,
+      snippet: item.text_matches?.[0]?.fragment || '(no preview)',
+    }));
   }
 }

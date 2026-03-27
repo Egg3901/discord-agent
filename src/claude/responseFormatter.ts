@@ -91,10 +91,14 @@ export class ResponseStreamer {
   async sendError(error: string): Promise<void> {
     this.stopTimers();
     const content = `Something went wrong: ${error}`;
-    if (this.currentMessage && this.sentMessages.length === 0) {
-      await this.currentMessage.edit(content);
-    } else {
-      await this.channel.send(content);
+    try {
+      if (this.currentMessage && this.sentMessages.length === 0) {
+        await this.currentMessage.edit(content);
+      } else {
+        await this.channel.send(content);
+      }
+    } catch (err) {
+      logger.error({ err }, 'Failed to send error message to Discord');
     }
   }
 
