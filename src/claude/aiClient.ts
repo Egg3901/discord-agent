@@ -204,7 +204,24 @@ export class AIClient {
         };
       }
 
-      const stream = await client.messages.create(params as any);
+      // Retry on transient 529/503 (overloaded) errors with exponential backoff
+      let stream: any;
+      const MAX_RETRIES = 3;
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          stream = await client.messages.create(params as any);
+          break;
+        } catch (retryErr: any) {
+          const status = retryErr?.status;
+          if ((status === 529 || status === 503) && attempt < MAX_RETRIES) {
+            const delay = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+            logger.warn({ attempt: attempt + 1, delay, status }, 'API overloaded, retrying');
+            await new Promise((r) => setTimeout(r, delay));
+            continue;
+          }
+          throw retryErr;
+        }
+      }
 
       // Track usage
       let inputTokens = 0;
