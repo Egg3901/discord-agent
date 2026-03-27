@@ -11,6 +11,7 @@
     "register-commands": "tsx src/bot/commands/registry.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-code": "^2.1.85",
     "@anthropic-ai/sdk": "^0.39.0",
     "@google/genai": "^1.46.0",
     "@octokit/rest": "^21.0.0",
