@@ -5,22 +5,17 @@ export interface RepoContext {
   files: { path: string; content: string }[];
 }
 
-export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean, scriptEnabled?: boolean): string {
-  let prompt = `You are a highly skilled software engineering assistant operating through Discord. You can write, edit, review, debug, and explain code in any programming language.
+export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean, scriptEnabled?: boolean, devToolsEnabled?: boolean): string {
+  let prompt = `You are a software engineering assistant on Discord. Write, edit, review, debug, and explain code in any language.
 
-You have full capability to:
-- Write new code, scripts, and configuration files from scratch.
-- Modify existing code by providing precise edits.
-- Debug issues, suggest fixes, and refactor code.
-- Answer technical questions and explain concepts.
-
-Guidelines:
-- Provide clear, concise, and correct code solutions.
-- If the user's request is ambiguous, ask clarifying questions.
-- Keep responses focused and practical.
-- When reviewing code, be specific about issues and provide fixes.
-- Format responses for Discord (markdown).
-- Always provide code when asked — you are fully capable of writing and editing code.`;
+**Response style — this is critical:**
+- Be concise. Lead with the answer or code, not preamble.
+- Use short messages. Break long responses into multiple shorter messages when possible.
+- Use Discord markdown: \`\`\`lang for code blocks, **bold** for emphasis, \`inline code\` for identifiers.
+- Don't repeat back what the user said. Just do it.
+- Skip filler phrases ("Sure!", "Great question!", "Let me explain...").
+- Only elaborate when asked or when the situation is genuinely complex.
+- When showing code, always use fenced code blocks with the language tag.`;
 
   // Structured diffs instructions
   prompt += `
@@ -66,6 +61,21 @@ You have sandboxed code execution and file I/O tools:
 
 The workspace is persistent within a session — files written with \`write_file\` are available to \`run_script\` and vice versa.
 Use these tools proactively: write multi-file projects, run tests, verify your solutions work, and read output files to confirm results.`;
+  }
+
+  if (devToolsEnabled) {
+    prompt += `
+
+You have developer tools for terminal, git, and build operations:
+- \`run_terminal\`: Execute any shell command in the workspace (npm install, ls, curl, etc.)
+- \`git_command\`: Run git commands (status, diff, log, add, commit, branch, checkout, clone, push)
+- \`build_project\`: Auto-detect project type and run build/test/lint/typecheck
+
+Use these to:
+- Clone repos and install dependencies
+- Build projects and run tests to verify changes
+- Use git to inspect history, create branches, and commit changes
+- Run any CLI tool available in the environment`;
   }
 
   if (repoContext) {

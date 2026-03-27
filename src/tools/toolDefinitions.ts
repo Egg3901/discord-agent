@@ -139,6 +139,58 @@ export const SANDBOX_TOOLS: ToolDefinition[] = [
 ];
 
 /**
+ * Developer tools for terminal, build, and git operations.
+ * Available when ENABLE_DEV_TOOLS is true.
+ */
+export const DEV_TOOLS: ToolDefinition[] = [
+  {
+    name: 'run_terminal',
+    description:
+      'Execute a shell command in the workspace. Returns stdout, stderr, and exit code. Use for installing dependencies, running builds, linting, testing, or any CLI operation. Commands run in the session workspace directory. Timeout: 60s.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: 'Shell command to execute (e.g. "npm install", "ls -la", "cat package.json")',
+        },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    name: 'git_command',
+    description:
+      'Run a git command in the workspace. Use for version control operations: status, diff, log, add, commit, branch, checkout, clone, pull, push. The workspace must be a git repo (or use git clone first). Returns command output.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'Git subcommand and arguments (e.g. "status", "diff --staged", "log --oneline -10", "add .", "commit -m \\"fix: typo\\"")',
+        },
+      },
+      required: ['args'],
+    },
+  },
+  {
+    name: 'build_project',
+    description:
+      'Detect the project type and run its build/test commands. Auto-detects package.json (npm/yarn/pnpm), Makefile, Cargo.toml, pyproject.toml, etc. Pass a custom command to override auto-detection. Returns build output and success/failure status.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          description: 'Action to run: "build", "test", "lint", "typecheck", or a custom command string. Defaults to "build".',
+        },
+      },
+      required: [],
+    },
+  },
+];
+
+/**
  * Convert Anthropic-format tool definitions to Gemini FunctionDeclaration format.
  */
 export function toGeminiFunctionDeclarations(tools: ToolDefinition[]) {
