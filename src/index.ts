@@ -14,6 +14,7 @@ import { createConfigCommand } from './bot/commands/config.js';
 import { createModelCommand } from './bot/commands/model.js';
 import { createHelpCommand } from './bot/commands/help.js';
 import { createUsageCommand } from './bot/commands/usage.js';
+import { createVersionCommand } from './bot/commands/version.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
@@ -46,6 +47,7 @@ async function main() {
     createModelCommand(sessionManager),
     createHelpCommand(),
     createUsageCommand(),
+    createVersionCommand(),
   ];
 
   const commandMap = new Map<string, CommandHandler>();
