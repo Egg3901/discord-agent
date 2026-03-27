@@ -15,6 +15,7 @@ import { isAllowed } from '../middleware/permissions.js';
 import { RepoFetcher } from '../../github/repoFetcher.js';
 import { ToolExecutor } from '../../tools/toolExecutor.js';
 import { runAgentLoop } from '../../claude/agentLoop.js';
+import { config } from '../../config.js';
 
 export function handleMessageCreate(
   client: Client,
@@ -82,10 +83,16 @@ export function handleMessageCreate(
 
       try {
         const hasRepo = session.repoOwner && session.repoName;
+        const hasTools = hasRepo || config.ENABLE_SCRIPT_EXECUTION;
 
-        if (hasRepo) {
+        if (hasTools) {
           // Agentic mode: multi-step tool use loop
-          const toolExecutor = new ToolExecutor(repoFetcher, session.repoOwner!, session.repoName!);
+          const toolExecutor = new ToolExecutor(
+            hasRepo ? repoFetcher : null,
+            session.repoOwner || '',
+            session.repoName || '',
+            session.id,
+          );
           const result = await runAgentLoop(
             aiClient,
             session.messages,
@@ -93,6 +100,7 @@ export function handleMessageCreate(
             {
               repoContext: session.repoContext,
               modelOverride: session.modelOverride,
+              enableRepoTools: !!hasRepo,
               onQueuePosition: (pos) => {
                 thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
               },

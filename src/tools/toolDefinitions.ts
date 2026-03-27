@@ -63,6 +63,82 @@ export const AGENT_TOOLS: ToolDefinition[] = [
 ];
 
 /**
+ * Tools for sandboxed code execution and file I/O.
+ * These are available when ENABLE_SCRIPT_EXECUTION is true, regardless of repo attachment.
+ */
+export const SANDBOX_TOOLS: ToolDefinition[] = [
+  {
+    name: 'run_script',
+    description:
+      'Execute a script in a sandboxed environment and return the output. Supported languages: python, javascript, typescript, bash, sh, ruby, perl. Use this to run code snippets, verify solutions, perform calculations, or demonstrate behavior. Scripts run in a persistent workspace where files from write_file are available.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        language: {
+          type: 'string',
+          description:
+            'Programming language (python, javascript, typescript, bash, sh, ruby, perl)',
+        },
+        code: {
+          type: 'string',
+          description: 'The script code to execute',
+        },
+      },
+      required: ['language', 'code'],
+    },
+  },
+  {
+    name: 'write_file',
+    description:
+      'Write a file to the sandboxed workspace. Use this to create source files, config files, data files, or any other files needed for script execution. Files persist across tool calls within the same session.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'File path relative to the workspace root (e.g. "src/main.py", "data.json"). Subdirectories are created automatically.',
+        },
+        content: {
+          type: 'string',
+          description: 'The file content to write',
+        },
+      },
+      required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'read_local_file',
+    description:
+      'Read a file from the sandboxed workspace. Use this to check file contents, read script output files, or verify written files.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'File path relative to the workspace root',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'list_workspace',
+    description:
+      'List files and directories in the sandboxed workspace. Use this to see what files exist in the current workspace.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Directory path relative to the workspace root. Use empty string "" for the root.',
+        },
+      },
+      required: ['path'],
+    },
+  },
+];
+
+/**
  * Convert Anthropic-format tool definitions to Gemini FunctionDeclaration format.
  */
 export function toGeminiFunctionDeclarations(tools: ToolDefinition[]) {

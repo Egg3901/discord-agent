@@ -3,6 +3,7 @@ import { logger } from '../utils/logger.js';
 import { SessionLimitError } from '../utils/errors.js';
 import { config } from '../config.js';
 import { getDatabase } from '../storage/database.js';
+import { cleanupSandbox } from '../tools/scriptExecutor.js';
 import type { Session } from './session.js';
 import type { RepoContext } from '../claude/contextBuilder.js';
 import type { ConversationMessage } from '../claude/aiClient.js';
@@ -94,6 +95,7 @@ export class SessionManager {
     if (session) {
       this.sessions.delete(threadId);
       this.deleteSessionFromDb(session.id);
+      cleanupSandbox(session.id).catch(() => {});
       logger.info({ sessionId: session.id, threadId }, 'Session ended');
       return true;
     }
@@ -119,6 +121,7 @@ export class SessionManager {
       if (now - session.lastActiveAt > STALE_SESSION_MS) {
         this.sessions.delete(threadId);
         this.deleteSessionFromDb(session.id);
+        cleanupSandbox(session.id).catch(() => {});
         pruned++;
         logger.info({ sessionId: session.id }, 'Stale session pruned');
       }

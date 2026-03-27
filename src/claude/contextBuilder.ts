@@ -5,7 +5,7 @@ export interface RepoContext {
   files: { path: string; content: string }[];
 }
 
-export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean): string {
+export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean, scriptEnabled?: boolean): string {
   let prompt = `You are a highly skilled software engineering assistant operating through Discord. You help users write, review, debug, and understand code.
 
 Guidelines:
@@ -46,6 +46,19 @@ You have tools to explore the attached GitHub repository:
 
 Use these tools proactively to explore the codebase before answering questions.
 Do not guess at file contents — read them first. When making code changes, read the relevant files to ensure your SEARCH blocks match exactly.`;
+  }
+
+  if (scriptEnabled) {
+    prompt += `
+
+You have sandboxed code execution and file I/O tools:
+- \`run_script\`: Execute code (python, javascript, typescript, bash, sh, ruby, perl). Use to run code, verify solutions, perform calculations, or demonstrate behavior.
+- \`write_file\`: Write files to the persistent workspace. Use to create source files, configs, data, or multi-file projects.
+- \`read_local_file\`: Read files from the workspace, including output files created by scripts.
+- \`list_workspace\`: List files in the workspace directory.
+
+The workspace is persistent within a session — files written with \`write_file\` are available to \`run_script\` and vice versa.
+Use these tools proactively: write multi-file projects, run tests, verify your solutions work, and read output files to confirm results.`;
   }
 
   if (repoContext) {

@@ -91,6 +91,8 @@ These features bring the bot closer to parity with tools like Claude Code and Co
 
 4. **Multi-step Agent Loops** — When tools are available, the bot runs an iterative loop: stream AI response -> execute tool calls -> feed results back -> repeat until done or max iterations. Status updates (tool calls) appear as quoted messages in the Discord thread. See `src/claude/agentLoop.ts`.
 
+5. **Script Execution & File I/O Sandbox** — Full sandboxed code execution with persistent workspace per session. Tools: `run_script` (execute code in 7 languages), `write_file` (create files in sandbox), `read_local_file` (read sandbox files), `list_workspace` (list sandbox contents). Files persist across tool calls, enabling multi-file projects, test execution, and output verification. Path traversal protection, configurable timeout, output limits. Sandbox auto-cleaned on session end. Disabled by default; enable via `ENABLE_SCRIPT_EXECUTION=true` or `/config set`. See `src/tools/scriptExecutor.ts` and `src/tools/toolExecutor.ts`.
+
 ## Remaining Parity Gaps
 
 ### Medium Priority
@@ -101,18 +103,16 @@ These features bring the bot closer to parity with tools like Claude Code and Co
 
 7. **Codebase Indexing** — Instead of fetching full repo files via `/repo`, build a searchable index so the AI can request relevant files on demand rather than stuffing everything in context upfront.
 
-8. **Code Execution Sandbox** — Run code snippets in a sandboxed environment (Docker, Firecracker, or WASM) and return output. Critical for verifying generated code.
-
-9. **Thinking Budget Controls** — Expose `max_tokens`, thinking budget, and temperature as session-level settings so users can control the cost vs quality tradeoff per task.
+8. **Thinking Budget Controls** — Expose `max_tokens`, thinking budget, and temperature as session-level settings so users can control the cost vs quality tradeoff per task.
 
 ### Lower Priority
 
-10. **Prompt Caching** — Use provider-specific caching (Anthropic prompt caching, Gemini context caching) for system prompts and repo context to reduce latency and cost on multi-turn sessions.
+9. **Prompt Caching** — Use provider-specific caching (Anthropic prompt caching, Gemini context caching) for system prompts and repo context to reduce latency and cost on multi-turn sessions.
 
-11. **File Output as Attachments** — Return generated files as Discord file attachments rather than inline code blocks when output exceeds a reasonable size.
+10. **File Output as Attachments** — Return generated files as Discord file attachments rather than inline code blocks when output exceeds a reasonable size.
 
-12. **Conversation Branching** — Allow users to fork a conversation from a specific point to explore alternate approaches without losing the original thread.
+11. **Conversation Branching** — Allow users to fork a conversation from a specific point to explore alternate approaches without losing the original thread.
 
-13. **Structured Progress** — Show what the agent is doing (tools called, files read, commands run) as structured updates rather than just streaming text.
+12. **Structured Progress** — Show what the agent is doing (tools called, files read, commands run) as structured updates rather than just streaming text.
 
-14. **Cost Tracking** — Track and display token usage and estimated cost per session and per user. The `usage_log` table already exists — surface it.
+13. **Cost Tracking** — Track and display token usage and estimated cost per session and per user. The `usage_log` table already exists — surface it.
