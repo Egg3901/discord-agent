@@ -81,6 +81,7 @@ class Config {
 
   /**
    * Set a config value at runtime. Returns true if the key is valid and was set.
+   * Persists the value to the database so it survives restarts.
    */
   set(key: string, value: string): { success: boolean; error?: string } {
     const meta = Config.SETTABLE_KEYS[key];
@@ -103,7 +104,35 @@ class Config {
       (this as any)[key] = value;
     }
 
+    // Persist to database so the value survives restarts (lazy import to avoid circular dep)
+    import('./storage/database.js')
+      .then(({ saveConfigValue }) => saveConfigValue(key, value))
+      .catch(() => {/* Non-fatal: value is still set in memory */});
+
     return { success: true };
+  }
+
+  /**
+   * Restore persisted config values from the database.
+   * Database values override .env defaults but not explicit env vars.
+   * Accepts stored values as a parameter to avoid circular dependency with database.ts.
+   */
+  restoreFromDb(stored: Record<string, string>): void {
+    for (const [key, value] of Object.entries(stored)) {
+      // Skip if the env var is explicitly set (env takes precedence)
+      if (process.env[key]) continue;
+      const meta = Config.SETTABLE_KEYS[key];
+      if (!meta) continue;
+
+      if (meta.type === 'number') {
+        const num = parseInt(value, 10);
+        if (!isNaN(num) && num > 0) (this as any)[key] = num;
+      } else if (key === 'ENABLE_EXTENDED_THINKING' || key === 'ENABLE_SCRIPT_EXECUTION' || key === 'ENABLE_DEV_TOOLS') {
+        (this as any)[key] = value === 'true';
+      } else {
+        (this as any)[key] = value;
+      }
+    }
   }
 
   /**
