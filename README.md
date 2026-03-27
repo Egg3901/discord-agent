@@ -64,6 +64,30 @@ npm start       # Production
 | `/admin stats` | View bot statistics |
 | `/admin prune` | Force-prune stale sessions |
 
+## Script Capabilities
+
+The bot is an AI coding assistant — it does **not** execute code or interact with file systems directly. It cannot run scripts, access databases, or modify files on a server.
+
+### What It Can Do
+
+| Capability | Description |
+|------------|-------------|
+| **Write scripts** | Generate complete, ready-to-run code in any language |
+| **Debug existing scripts** | Analyze code you share and help fix issues |
+| **Explain how to run scripts** | Provide step-by-step execution instructions for your environment |
+| **Optimize & review** | Improve performance, readability, and correctness of code you share |
+| **Explore GitHub repos** | When a repo is attached via `/repo`, the bot can read files, list directories, and search code using GitHub API tools |
+
+### What It Cannot Do
+
+- Execute or run code snippets
+- Access local file systems or databases
+- Install packages or dependencies
+- Make HTTP requests to external services
+- Modify files outside of Discord messages
+
+When users ask the bot to run a script, it will provide the code along with instructions for executing it in their own environment.
+
 ## Architecture
 
 ```
