@@ -24,6 +24,9 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 > \`/session end\` — End your current session
 > \`/session status\` — View your active sessions
 > \`/usage [period] [all]\` — View your token usage and costs
+> \`/config set <key> <value>\` — Set a runtime config value
+> \`/config list\` — Show settable config keys
+> \`/version\` — Show bot version, uptime, and latest commit
 > \`/help\` — This message
 
 **Admin Commands (requires Administrator):**
@@ -35,8 +38,6 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 > \`/admin roles\` — List allowed roles
 > \`/admin stats\` — Bot statistics
 > \`/admin prune\` — Force-prune stale sessions
-> \`/config set <key> <value>\` — Set a config value (values never displayed)
-> \`/config list\` — Show settable config keys
 
 **Code Execution Sandbox:**
 • When enabled, the bot can run scripts, write/read files, and build multi-file projects in an isolated workspace
