@@ -350,6 +350,10 @@ export class AIClient {
       if (apiKey) {
         env.ANTHROPIC_API_KEY = apiKey;
       }
+      // Pass GITHUB_TOKEN so the CLI can authenticate git operations
+      if (config.GITHUB_TOKEN) {
+        env.GITHUB_TOKEN = config.GITHUB_TOKEN;
+      }
       // Allow overriding HOME so the CLI finds the correct ~/.claude/ login
       if (config.CLAUDE_CODE_HOME) {
         env.HOME = config.CLAUDE_CODE_HOME;
