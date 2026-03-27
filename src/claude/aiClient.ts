@@ -285,19 +285,15 @@ export class AIClient {
       return;
     }
 
-    // Acquire an Anthropic API key from the pool for Claude Code CLI auth
-    const hasAnthropicKeys = this.keyPool.hasKeysForProvider('anthropic');
+    // Optionally acquire an API key from the pool; if none available,
+    // the CLI will use its own login (e.g. Claude Max plan).
     let apiKey: string | undefined;
     let releaseKey: ((success: boolean) => void) | undefined;
 
-    if (hasAnthropicKeys) {
+    if (this.keyPool.hasKeysForProvider('anthropic')) {
       const acquired = await this.keyPool.acquire('anthropic', options.onQueuePosition);
       apiKey = acquired.key.apiKey;
       releaseKey = acquired.release;
-    } else {
-      yield { type: 'text', text: 'Claude Code requires an Anthropic API key. Please add one with `/admin addkey`.' } as TextChunkEvent;
-      yield { type: 'stop', stopReason: 'end_turn' } as StopEvent;
-      return;
     }
 
     try {
@@ -307,7 +303,6 @@ export class AIClient {
         '--output-format', 'stream-json',
         '--verbose',
         '--dangerously-skip-permissions',
-        '--bare',  // Skip hooks, CLAUDE.md, and local config
       ];
 
       // Resume previous Claude Code session if available (for conversation continuity)
@@ -319,13 +314,18 @@ export class AIClient {
 
       cliArgs.push(prompt);
 
-      // Pass API key via environment variable so CLI can authenticate
+      // Build env: use pool API key if available, otherwise inherit the
+      // host's Claude Code login (Max plan / OAuth) from the environment.
       const env = { ...process.env };
       if (apiKey) {
         env.ANTHROPIC_API_KEY = apiKey;
       }
+      // Allow overriding HOME so the CLI finds the correct ~/.claude/ login
+      if (config.CLAUDE_CODE_HOME) {
+        env.HOME = config.CLAUDE_CODE_HOME;
+      }
 
-      logger.debug({ provider: 'claude-code', sessionKey, resume: !!existingSessionId, hasApiKey: !!apiKey }, 'Starting Claude Code stream');
+      logger.debug({ provider: 'claude-code', sessionKey, resume: !!existingSessionId, hasApiKey: !!apiKey, home: env.HOME }, 'Starting Claude Code stream');
 
       yield* this.spawnClaudeCodeProcess(cliArgs, sessionKey, env);
       releaseKey?.(true);
