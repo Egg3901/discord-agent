@@ -42,6 +42,11 @@ class Config {
   // Dev tools (terminal, git, build)
   ENABLE_DEV_TOOLS = process.env['ENABLE_DEV_TOOLS'] === 'true';
 
+  // Claude Code provider: HOME directory override for finding CLI login credentials.
+  // Set this to the home dir of the user who ran `claude login` (e.g. /home/myuser)
+  // when the bot runs as a different user (e.g. systemd service).
+  CLAUDE_CODE_HOME: string | null = process.env['CLAUDE_CODE_HOME'] || null;
+
   // Access control: managed via /admin allowrole and stored in database
   // Empty = everyone can use the bot
 
@@ -71,6 +76,7 @@ class Config {
     ENABLE_SCRIPT_EXECUTION: { type: 'string', description: 'Enable sandboxed script execution tool (true/false)' },
     SCRIPT_TIMEOUT_MS: { type: 'number', description: 'Script execution timeout in milliseconds' },
     ENABLE_DEV_TOOLS: { type: 'string', description: 'Enable terminal, git, and build tools (true/false)' },
+    CLAUDE_CODE_HOME: { type: 'string', description: 'HOME directory for Claude Code CLI login (e.g. /home/myuser)' },
   };
 
   /**

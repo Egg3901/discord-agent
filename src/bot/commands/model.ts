@@ -7,8 +7,8 @@ import { SessionManager } from '../../sessions/sessionManager.js';
 import type { CommandHandler } from './types.js';
 
 const AVAILABLE_MODELS = [
-  // Claude Code (uses local CLI login — no API key needed)
-  { name: 'Claude Code (local CLI)', value: 'claude-code' },
+  // Claude Code (uses host's CLI login / Max plan, or pool API key)
+  { name: 'Claude Code', value: 'claude-code' },
   // Claude (Anthropic API)
   { name: 'Claude Opus 4.6', value: 'claude-opus-4-6' },
   { name: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6' },
