@@ -326,16 +326,12 @@ export class AIClient {
       return;
     }
 
-    // Optionally acquire an API key from the pool; if none available,
-    // the CLI will use its own login (e.g. Claude Max plan).
+    // The CLI will use its own login (e.g. Claude Max plan / OAuth).
+    // We do NOT pass a pool API key here — that would override the CLI's
+    // own auth and cause "credit balance too low" errors when pool keys
+    // have limited credits.
     let apiKey: string | undefined;
     let releaseKey: ((success: boolean) => void) | undefined;
-
-    if (this.keyPool.hasKeysForProvider('anthropic')) {
-      const acquired = await this.keyPool.acquire('anthropic', options.onQueuePosition);
-      apiKey = acquired.key.apiKey;
-      releaseKey = acquired.release;
-    }
 
     try {
       // Build CLI args
