@@ -1,5 +1,10 @@
 # Discord Agent - Agent Instructions
 
+## Communication Style
+
+- Keep responses **1-2 sentences** unless instructed otherwise or complexity genuinely requires more.
+- Use **Discord-style formatting**: bold headings, bullet lists, italics — not prose paragraphs.
+
 Instructions for AI coding agents (Claude Code, Codex, Copilot, Cursor, Windsurf, etc.) working on this codebase.
 
 ## Project Overview

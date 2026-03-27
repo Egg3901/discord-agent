@@ -2,6 +2,7 @@ import {
   SlashCommandBuilder,
   ChannelType,
   type ChatInputCommandInteraction,
+  type AutocompleteInteraction,
   type TextChannel,
   type ThreadChannel,
 } from 'discord.js';
@@ -39,8 +40,24 @@ export function createCodeCommand(
         opt
           .setName('repo')
           .setDescription('GitHub repository URL for context (optional)')
-          .setRequired(false),
+          .setRequired(false)
+          .setAutocomplete(true),
       ),
+
+    async autocomplete(interaction: AutocompleteInteraction) {
+      const focused = interaction.options.getFocused();
+      try {
+        const repos = await repoFetcher.listUserRepos(focused || undefined);
+        await interaction.respond(
+          repos.map((r) => ({
+            name: `${r.fullName}${r.isPrivate ? ' 🔒' : ''}${r.description ? ` — ${r.description}` : ''}`.slice(0, 100),
+            value: `https://github.com/${r.fullName}`,
+          })),
+        );
+      } catch {
+        await interaction.respond([]);
+      }
+    },
 
     async execute(interaction: ChatInputCommandInteraction) {
       if (!isAllowed(interaction.member as GuildMember | null)) {
