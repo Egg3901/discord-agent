@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
 import { buildSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
-import { AGENT_TOOLS, SANDBOX_TOOLS, toGeminiFunctionDeclarations } from '../tools/toolDefinitions.js';
+import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, toGeminiFunctionDeclarations } from '../tools/toolDefinitions.js';
 import type { Provider } from '../keys/types.js';
 
 // --- Content block types (provider-agnostic) ---
@@ -91,6 +91,9 @@ function getActiveTools(options: StreamOptions): import('../tools/toolDefinition
   if (config.ENABLE_SCRIPT_EXECUTION) {
     tools.push(...SANDBOX_TOOLS);
   }
+  if (config.ENABLE_DEV_TOOLS) {
+    tools.push(...DEV_TOOLS);
+  }
   return tools;
 }
 
@@ -146,7 +149,7 @@ export class AIClient {
     model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION);
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS);
     const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
 
     // Convert messages to Anthropic format
@@ -248,7 +251,7 @@ export class AIClient {
     model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION);
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS);
     const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
 
     const { key, release } = await this.keyPool.acquire('google', options.onQueuePosition);

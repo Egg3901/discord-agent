@@ -39,6 +39,9 @@ class Config {
   ENABLE_SCRIPT_EXECUTION = process.env['ENABLE_SCRIPT_EXECUTION'] === 'true';
   SCRIPT_TIMEOUT_MS = parseInt(optional('SCRIPT_TIMEOUT_MS', '30000'), 10);
 
+  // Dev tools (terminal, git, build)
+  ENABLE_DEV_TOOLS = process.env['ENABLE_DEV_TOOLS'] === 'true';
+
   // Access control: managed via /admin allowrole and stored in database
   // Empty = everyone can use the bot
 
@@ -67,6 +70,7 @@ class Config {
     MAX_AGENT_ITERATIONS: { type: 'number', description: 'Max tool-use iterations per agent loop' },
     ENABLE_SCRIPT_EXECUTION: { type: 'string', description: 'Enable sandboxed script execution tool (true/false)' },
     SCRIPT_TIMEOUT_MS: { type: 'number', description: 'Script execution timeout in milliseconds' },
+    ENABLE_DEV_TOOLS: { type: 'string', description: 'Enable terminal, git, and build tools (true/false)' },
   };
 
   /**
@@ -84,7 +88,7 @@ class Config {
         return { success: false, error: `\`${key}\` must be a positive number.` };
       }
       (this as any)[key] = num;
-    } else if (key === 'ENABLE_EXTENDED_THINKING' || key === 'ENABLE_SCRIPT_EXECUTION') {
+    } else if (key === 'ENABLE_EXTENDED_THINKING' || key === 'ENABLE_SCRIPT_EXECUTION' || key === 'ENABLE_DEV_TOOLS') {
       if (value !== 'true' && value !== 'false') {
         return { success: false, error: `\`${key}\` must be 'true' or 'false'.` };
       }

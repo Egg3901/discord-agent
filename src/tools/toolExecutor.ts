@@ -1,5 +1,7 @@
 import { RepoFetcher } from '../github/repoFetcher.js';
 import { executeScript, sandboxWriteFile, sandboxReadFile, sandboxListFiles, getSandboxDir } from './scriptExecutor.js';
+import { DevToolExecutor } from './devToolExecutor.js';
+import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
 const MAX_FILE_CONTENT = 50_000; // 50KB truncation for tool results
@@ -7,8 +9,11 @@ const MAX_PATH_LENGTH = 500;
 const MAX_QUERY_LENGTH = 200;
 const MAX_SCRIPT_LENGTH = 50_000;
 
+const DEV_TOOL_NAMES = new Set(['run_terminal', 'git_command', 'build_project']);
+
 export class ToolExecutor {
   private sandboxDir: string | null = null;
+  private devExecutor: DevToolExecutor | null = null;
 
   constructor(
     private repoFetcher: RepoFetcher | null,
@@ -35,6 +40,21 @@ export class ToolExecutor {
     try {
       if (!input || typeof input !== 'object') {
         return 'Error: Invalid tool input';
+      }
+
+      // Route dev tools to DevToolExecutor
+      if (DEV_TOOL_NAMES.has(toolName)) {
+        if (!(config as any).ENABLE_DEV_TOOLS) {
+          return 'Error: Dev tools are disabled. An admin can enable them with `/config set ENABLE_DEV_TOOLS true`.';
+        }
+        if (!this.devExecutor) {
+          const sandbox = await this.getSandbox();
+          this.devExecutor = new DevToolExecutor(sandbox);
+        }
+        const result = await this.devExecutor.execute(toolName, input);
+        const duration = Date.now() - startTime;
+        logger.debug({ toolName, duration }, 'Dev tool executed');
+        return result;
       }
 
       let result: string;
