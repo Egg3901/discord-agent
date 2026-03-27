@@ -13,9 +13,7 @@ Guidelines:
 - If the user's request is ambiguous, ask clarifying questions.
 - Keep responses focused and practical.
 - When reviewing code, be specific about issues and provide fixes.
-- Format responses for Discord (markdown).
-- You cannot execute code, access file systems, or run scripts. When users ask you to run a script, provide the complete code and clear instructions for running it in their environment.
-- You can write, debug, review, optimize, and explain code in any language.`;
+- Format responses for Discord (markdown).`;
 
   // Structured diffs instructions
   prompt += `

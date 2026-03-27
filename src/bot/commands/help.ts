@@ -37,11 +37,6 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 > \`/config set <key> <value>\` — Set a config value (values never displayed)
 > \`/config list\` — Show settable config keys
 
-**Script Capabilities:**
-• The bot writes, debugs, reviews, and explains code — but does not execute scripts
-• When you ask for a script, you'll get ready-to-run code with execution instructions
-• Attach a GitHub repo with \`/repo\` for context-aware assistance using repo exploration tools
-
 **Tips:**
 • Attach code files (.ts, .py, .js, etc.) to messages — they're included as context
 • Responses stream in real-time with progress updates
