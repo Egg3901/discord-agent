@@ -61,12 +61,22 @@ export interface StopEvent {
 
 export type AIStreamEvent = TextChunkEvent | ToolUseEvent | ThinkingEvent | StopEvent;
 
+export interface UsageInfo {
+  tokensIn: number;
+  tokensOut: number;
+  costUsd?: number;
+  model: string;
+  keyId: string;
+}
+
 export interface StreamOptions {
   repoContext?: RepoContext;
   modelOverride?: string;
   onQueuePosition?: (position: number) => void;
   enableTools?: boolean;
   enableRepoTools?: boolean;
+  /** Called when usage info is available after a response completes */
+  onUsage?: (usage: UsageInfo) => void;
 }
 
 /**
@@ -196,13 +206,19 @@ export class AIClient {
 
       const stream = await client.messages.create(params as any);
 
+      // Track usage
+      let inputTokens = 0;
+      let outputTokens = 0;
+
       // Accumulate tool_use input JSON across deltas
       let currentToolId = '';
       let currentToolName = '';
       let toolInputJson = '';
 
       for await (const event of stream as any) {
-        if (event.type === 'content_block_start') {
+        if (event.type === 'message_start') {
+          inputTokens = event.message?.usage?.input_tokens || 0;
+        } else if (event.type === 'content_block_start') {
           if (event.content_block?.type === 'tool_use') {
             currentToolId = event.content_block.id;
             currentToolName = event.content_block.name;
@@ -236,12 +252,20 @@ export class AIClient {
             toolInputJson = '';
           }
         } else if (event.type === 'message_delta') {
+          outputTokens = event.usage?.output_tokens || outputTokens;
           yield {
             type: 'stop',
             stopReason: event.delta?.stop_reason || 'end_turn',
           } as StopEvent;
         }
       }
+
+      options.onUsage?.({
+        tokensIn: inputTokens,
+        tokensOut: outputTokens,
+        model,
+        keyId: key.id,
+      });
 
       release(true);
     } catch (err) {
@@ -258,7 +282,7 @@ export class AIClient {
 
   private async *streamClaudeCode(
     messages: ConversationMessage[],
-    _model: string,
+    model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
     // Extract the last user message as the prompt
@@ -305,6 +329,12 @@ export class AIClient {
         '--dangerously-skip-permissions',
       ];
 
+      // Pass model override to CLI (e.g. "claude-code-sonnet" -> "sonnet")
+      const cliModel = model.replace(/^claude-code-?/, '');
+      if (cliModel && cliModel !== 'claude-code') {
+        cliArgs.push('--model', cliModel);
+      }
+
       // Resume previous Claude Code session if available (for conversation continuity)
       const sessionKey = options.repoContext?.repoUrl || 'default';
       const existingSessionId = this.claudeCodeSessions.get(sessionKey);
@@ -327,7 +357,7 @@ export class AIClient {
 
       logger.debug({ provider: 'claude-code', sessionKey, resume: !!existingSessionId, hasApiKey: !!apiKey, home: env.HOME }, 'Starting Claude Code stream');
 
-      yield* this.spawnClaudeCodeProcess(cliArgs, sessionKey, env);
+      yield* this.spawnClaudeCodeProcess(cliArgs, sessionKey, env, options.onUsage);
       releaseKey?.(true);
     } catch (err) {
       releaseKey?.(false);
@@ -339,6 +369,7 @@ export class AIClient {
     cliArgs: string[],
     sessionKey: string,
     env: Record<string, string | undefined>,
+    onUsage?: StreamOptions['onUsage'],
   ): AsyncGenerator<AIStreamEvent> {
     const proc: ChildProcess = spawn('claude', cliArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -348,7 +379,7 @@ export class AIClient {
     let hasYieldedText = false;
 
     // Create async iterable from stdout
-    const events = this.parseClaudeCodeStream(proc, sessionKey);
+    const events = this.parseClaudeCodeStream(proc, sessionKey, onUsage);
 
     for await (const event of events) {
       if (event.type === 'text') hasYieldedText = true;
@@ -364,6 +395,7 @@ export class AIClient {
   private async *parseClaudeCodeStream(
     proc: ChildProcess,
     sessionKey: string,
+    onUsage?: StreamOptions['onUsage'],
   ): AsyncGenerator<AIStreamEvent> {
     let buffer = '';
 
@@ -409,6 +441,16 @@ export class AIClient {
         const line = lines.shift()!;
         try {
           const msg = JSON.parse(line);
+          // Capture usage from result event
+          if (msg.type === 'result' && onUsage) {
+            onUsage({
+              tokensIn: msg.total_input_tokens || msg.input_tokens || 0,
+              tokensOut: msg.total_output_tokens || msg.output_tokens || 0,
+              costUsd: msg.total_cost_usd || msg.cost_usd || undefined,
+              model: msg.model || 'claude-code',
+              keyId: 'claude-code',
+            });
+          }
           const event = this.handleClaudeCodeMessage(msg, sessionKey);
           if (event) yield event;
         } catch {
@@ -531,6 +573,14 @@ export class AIClient {
       }
 
       yield { type: 'stop', stopReason: hasToolCalls ? 'tool_use' : 'end_turn' } as StopEvent;
+
+      options.onUsage?.({
+        tokensIn: 0,
+        tokensOut: 0,
+        model,
+        keyId: key.id,
+      });
+
       release(true);
     } catch (err) {
       logger.error({ err, keyId: key.id, model }, 'Gemini API error');

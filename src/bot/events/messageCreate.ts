@@ -16,6 +16,7 @@ import { RepoFetcher } from '../../github/repoFetcher.js';
 import { ToolExecutor } from '../../tools/toolExecutor.js';
 import { runAgentLoop } from '../../claude/agentLoop.js';
 import { config } from '../../config.js';
+import { logUsage } from '../../storage/database.js';
 
 export function handleMessageCreate(
   client: Client,
@@ -85,6 +86,18 @@ export function handleMessageCreate(
         const hasRepo = session.repoOwner && session.repoName;
         const hasTools = hasRepo || config.ENABLE_SCRIPT_EXECUTION;
 
+        const onUsage = (usage: import('../../claude/aiClient.js').UsageInfo) => {
+          logUsage({
+            userId: message.author.id,
+            sessionId: session.id,
+            keyId: usage.keyId,
+            tokensIn: usage.tokensIn,
+            tokensOut: usage.tokensOut,
+            model: usage.model,
+            costUsd: usage.costUsd,
+          });
+        };
+
         if (hasTools) {
           // Agentic mode: multi-step tool use loop
           const toolExecutor = new ToolExecutor(
@@ -104,6 +117,7 @@ export function handleMessageCreate(
               onQueuePosition: (pos) => {
                 thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
               },
+              onUsage,
             },
             {
               onTextChunk: (text) => streamer.push(text),
@@ -146,6 +160,7 @@ export function handleMessageCreate(
               onQueuePosition: (pos) => {
                 thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
               },
+              onUsage,
             },
           )) {
             fullResponse += chunk;

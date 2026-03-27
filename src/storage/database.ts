@@ -63,6 +63,91 @@ function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_usage_log_user_id ON usage_log(user_id);
     CREATE INDEX IF NOT EXISTS idx_usage_log_timestamp ON usage_log(timestamp);
   `);
+
+  // Migration: add cost_usd column if missing
+  const cols = db.prepare("PRAGMA table_info(usage_log)").all() as any[];
+  if (!cols.some((c: any) => c.name === 'cost_usd')) {
+    db.exec('ALTER TABLE usage_log ADD COLUMN cost_usd REAL');
+  }
+}
+
+export function logUsage(entry: {
+  userId: string;
+  sessionId?: string;
+  keyId: string;
+  tokensIn: number;
+  tokensOut: number;
+  model: string;
+  costUsd?: number;
+}): void {
+  const db = getDatabase();
+  db.prepare(`
+    INSERT INTO usage_log (user_id, session_id, key_id, tokens_in, tokens_out, model, cost_usd, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    entry.userId,
+    entry.sessionId || null,
+    entry.keyId,
+    entry.tokensIn,
+    entry.tokensOut,
+    entry.model,
+    entry.costUsd || null,
+    Date.now(),
+  );
+}
+
+export interface UsageSummary {
+  totalRequests: number;
+  totalTokensIn: number;
+  totalTokensOut: number;
+  totalCostUsd: number;
+  models: Record<string, { requests: number; tokensIn: number; tokensOut: number }>;
+}
+
+export function getUsageSummary(userId?: string, sinceDaysAgo: number = 30): UsageSummary {
+  const db = getDatabase();
+  const since = Date.now() - sinceDaysAgo * 24 * 60 * 60 * 1000;
+
+  const whereClause = userId
+    ? 'WHERE timestamp >= ? AND user_id = ?'
+    : 'WHERE timestamp >= ?';
+  const params = userId ? [since, userId] : [since];
+
+  const totals = db.prepare(`
+    SELECT
+      COUNT(*) as total_requests,
+      COALESCE(SUM(tokens_in), 0) as total_tokens_in,
+      COALESCE(SUM(tokens_out), 0) as total_tokens_out,
+      COALESCE(SUM(cost_usd), 0) as total_cost_usd
+    FROM usage_log ${whereClause}
+  `).get(...params) as any;
+
+  const byModel = db.prepare(`
+    SELECT
+      model,
+      COUNT(*) as requests,
+      COALESCE(SUM(tokens_in), 0) as tokens_in,
+      COALESCE(SUM(tokens_out), 0) as tokens_out
+    FROM usage_log ${whereClause}
+    GROUP BY model ORDER BY requests DESC
+  `).all(...params) as any[];
+
+  const models: Record<string, { requests: number; tokensIn: number; tokensOut: number }> = {};
+  for (const row of byModel) {
+    models[row.model || 'unknown'] = {
+      requests: row.requests,
+      tokensIn: row.tokens_in,
+      tokensOut: row.tokens_out,
+    };
+  }
+
+  return {
+    totalRequests: totals.total_requests,
+    totalTokensIn: totals.total_tokens_in,
+    totalTokensOut: totals.total_tokens_out,
+    totalCostUsd: totals.total_cost_usd,
+    models,
+  };
 }
 
 export function closeDatabase(): void {
