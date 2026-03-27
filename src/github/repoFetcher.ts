@@ -18,6 +18,9 @@ export class RepoFetcher {
   private get octokit(): Octokit {
     return new Octokit({
       auth: config.GITHUB_TOKEN || undefined,
+      request: {
+        timeout: 15_000, // 15 second timeout per request
+      },
     });
   }
 

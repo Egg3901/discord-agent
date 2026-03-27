@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
+import { nanoid } from 'nanoid';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
@@ -272,7 +273,7 @@ export class AIClient {
           if (part.functionCall) {
             yield {
               type: 'tool_use',
-              id: `gemini-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              id: `gemini-${nanoid(12)}`,
               name: part.functionCall.name,
               input: part.functionCall.args || {},
             } as ToolUseEvent;

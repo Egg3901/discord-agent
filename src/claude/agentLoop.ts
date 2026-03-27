@@ -35,6 +35,7 @@ export async function runAgentLoop(
 
   // Work on a copy so we don't mutate the caller's array during the loop
   const workingMessages = [...messages];
+  let previousToolKey = '';
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // Collect events from the stream
@@ -91,10 +92,18 @@ export async function runAgentLoop(
       newMessages.push(assistantMsg);
     }
 
-    // If no tool calls, we're done
+    // If no tool calls or empty response, we're done
     if (toolUses.length === 0 || stopReason === 'end_turn') {
       break;
     }
+
+    // Stuck-loop detection: if exact same tool calls as previous iteration, bail
+    const currentToolKey = toolUses.map((t) => `${t.name}:${JSON.stringify(t.input)}`).join('|');
+    if (currentToolKey === previousToolKey) {
+      logger.warn({ iteration, toolCalls: toolUses.map((t) => t.name) }, 'Agent loop: repeated tool calls detected, stopping');
+      break;
+    }
+    previousToolKey = currentToolKey;
 
     // Execute tools and build tool_result blocks
     const toolResultBlocks: ContentBlock[] = [];

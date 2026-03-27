@@ -64,12 +64,28 @@ export class SessionManager {
     // Cap messages to prevent unbounded memory growth
     if (session.messages.length > MAX_MESSAGES_PER_SESSION) {
       const first = session.messages[0];
-      const trimmed = session.messages.slice(-MAX_MESSAGES_PER_SESSION + 2);
-      session.messages = [
-        first,
-        { role: 'user', content: '[Earlier messages trimmed due to session length]' },
-        ...trimmed,
-      ];
+      const trimNotice = '[Earlier messages trimmed due to session length]';
+      // Check if a trim notice already exists (second message)
+      const hasTrimNotice =
+        session.messages.length > 1 &&
+        typeof session.messages[1].content === 'string' &&
+        session.messages[1].content === trimNotice;
+
+      if (hasTrimNotice) {
+        // Keep first message + trim notice + last N
+        session.messages = [
+          first,
+          session.messages[1],
+          ...session.messages.slice(-(MAX_MESSAGES_PER_SESSION - 2)),
+        ];
+      } else {
+        // Insert trim notice for the first time
+        session.messages = [
+          first,
+          { role: 'user', content: trimNotice },
+          ...session.messages.slice(-(MAX_MESSAGES_PER_SESSION - 2)),
+        ];
+      }
     }
   }
 

@@ -102,6 +102,9 @@ export function createCodeCommand(
           } catch (err) {
             logger.warn({ err, repoUrl }, 'Failed to fetch repo for /code');
             await thread.send('> Failed to load repository context. Continuing without it.');
+            repoOwner = undefined;
+            repoName = undefined;
+            repoContext = undefined;
           }
         }
 

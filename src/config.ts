@@ -79,6 +79,9 @@ class Config {
       }
       (this as any)[key] = num;
     } else if (key === 'ENABLE_EXTENDED_THINKING') {
+      if (value !== 'true' && value !== 'false') {
+        return { success: false, error: `\`${key}\` must be 'true' or 'false'.` };
+      }
       (this as any)[key] = value === 'true';
     } else {
       (this as any)[key] = value;

@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
-import type { AnthropicClient } from '../../claude/anthropicClient.js';
+import type { AIClient } from '../../claude/aiClient.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { formatApiError } from '../../utils/errors.js';
 import { isAllowed } from '../middleware/permissions.js';
@@ -9,7 +9,7 @@ import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
 
 export function createAskCommand(
-  anthropicClient: AnthropicClient,
+  aiClient: AIClient,
   rateLimiter: RateLimiter,
 ): CommandHandler {
   return {
@@ -45,7 +45,7 @@ export function createAskCommand(
       await interaction.deferReply();
 
       try {
-        const response = await anthropicClient.getResponse([
+        const response = await aiClient.getResponse([
           { role: 'user', content: question },
         ]);
 

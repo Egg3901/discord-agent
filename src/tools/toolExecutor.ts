@@ -2,6 +2,8 @@ import { RepoFetcher } from '../github/repoFetcher.js';
 import { logger } from '../utils/logger.js';
 
 const MAX_FILE_CONTENT = 50_000; // 50KB truncation for tool results
+const MAX_PATH_LENGTH = 500;
+const MAX_QUERY_LENGTH = 200;
 
 export class ToolExecutor {
   constructor(
@@ -14,20 +16,49 @@ export class ToolExecutor {
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<string> {
+    const startTime = Date.now();
     try {
-      switch (toolName) {
-        case 'read_file':
-          return await this.readFile(input.path as string);
-        case 'list_directory':
-          return await this.listDirectory(input.path as string);
-        case 'search_code':
-          return await this.searchCode(input.query as string);
-        default:
-          return `Unknown tool: ${toolName}`;
+      if (!input || typeof input !== 'object') {
+        return 'Error: Invalid tool input';
       }
+
+      let result: string;
+      switch (toolName) {
+        case 'read_file': {
+          const path = input.path;
+          if (typeof path !== 'string' || path.length === 0 || path.length > MAX_PATH_LENGTH) {
+            return 'Error: path must be a non-empty string (max 500 chars)';
+          }
+          result = await this.readFile(path);
+          break;
+        }
+        case 'list_directory': {
+          const path = input.path;
+          if (typeof path !== 'string' || path.length > MAX_PATH_LENGTH) {
+            return 'Error: path must be a string (max 500 chars)';
+          }
+          result = await this.listDirectory(path);
+          break;
+        }
+        case 'search_code': {
+          const query = input.query;
+          if (typeof query !== 'string' || query.length === 0 || query.length > MAX_QUERY_LENGTH) {
+            return 'Error: query must be a non-empty string (max 200 chars)';
+          }
+          result = await this.searchCode(query);
+          break;
+        }
+        default:
+          result = `Unknown tool: ${toolName}`;
+      }
+
+      const duration = Date.now() - startTime;
+      logger.debug({ toolName, duration }, 'Tool executed');
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.warn({ err, toolName, input, owner: this.owner, repo: this.repo }, 'Tool execution failed');
+      const duration = Date.now() - startTime;
+      logger.warn({ err, toolName, input, duration, owner: this.owner, repo: this.repo }, 'Tool execution failed');
       return `Error: ${message}`;
     }
   }
@@ -57,6 +88,8 @@ export class ToolExecutor {
     if (results.length === 0) {
       return `No results found for: ${query}`;
     }
-    return results.map((r) => `${r.path}: ${r.snippet}`).join('\n');
+    return results
+      .map((r, i) => `[${i + 1}] ${r.path}\n${r.snippet}`)
+      .join('\n\n---\n\n');
   }
 }
