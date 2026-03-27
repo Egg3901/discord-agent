@@ -6,7 +6,7 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
 import { buildSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
-import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, toGeminiFunctionDeclarations } from '../tools/toolDefinitions.js';
+import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations } from '../tools/toolDefinitions.js';
 import type { Provider } from '../keys/types.js';
 
 // --- Content block types (provider-agnostic) ---
@@ -77,6 +77,15 @@ export interface StreamOptions {
   enableRepoTools?: boolean;
   /** Called when usage info is available after a response completes */
   onUsage?: (usage: UsageInfo) => void;
+  /** Per-session thinking override (null/undefined = use global config) */
+  thinkingEnabled?: boolean | null;
+  thinkingBudget?: number | null;
+  /** Abort signal to cancel the in-flight request */
+  signal?: AbortSignal;
+  /** Whether web search tools are available */
+  enableWebSearch?: boolean;
+  /** Image attachments to include with the next user message */
+  imageAttachments?: { mediaType: string; base64Data: string }[];
 }
 
 /**
@@ -108,6 +117,9 @@ function getActiveTools(options: StreamOptions): import('../tools/toolDefinition
   }
   if (config.ENABLE_DEV_TOOLS) {
     tools.push(...DEV_TOOLS);
+  }
+  if (options.enableWebSearch) {
+    tools.push(...WEB_TOOLS);
   }
   return tools;
 }
@@ -166,7 +178,7 @@ export class AIClient {
     model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS);
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch);
     const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
 
     // Convert messages to Anthropic format
@@ -175,17 +187,39 @@ export class AIClient {
       content: m.content as any, // Anthropic SDK accepts string | ContentBlock[]
     }));
 
+    // Inject image attachments into the last user message
+    if (options.imageAttachments?.length) {
+      const lastUser = [...anthropicMessages].reverse().find((m) => m.role === 'user');
+      if (lastUser) {
+        const textContent = typeof lastUser.content === 'string' ? lastUser.content : '';
+        const blocks: any[] = [];
+        for (const img of options.imageAttachments) {
+          blocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mediaType, data: img.base64Data },
+          });
+        }
+        blocks.push({ type: 'text', text: textContent || '(see attached image)' });
+        lastUser.content = blocks;
+      }
+    }
+
     const { key, release } = await this.keyPool.acquire('anthropic', options.onQueuePosition);
 
     try {
       const client = new Anthropic({ apiKey: key.apiKey });
       logger.debug({ model, keyId: key.id, provider: 'anthropic' }, 'Starting stream');
 
-      const useThinking = config.ENABLE_EXTENDED_THINKING;
+      // Resolve thinking: per-session override > global config
+      const useThinking = options.thinkingEnabled != null
+        ? options.thinkingEnabled
+        : config.ENABLE_EXTENDED_THINKING;
+      const thinkingBudget = options.thinkingBudget || config.THINKING_BUDGET_TOKENS;
+
       const params: Record<string, any> = {
         model,
-        max_tokens: useThinking ? config.THINKING_BUDGET_TOKENS + 16384 : 16384,
-        system: systemPrompt,
+        max_tokens: useThinking ? thinkingBudget + 16384 : 16384,
+        system: applyPromptCaching(systemPrompt),
         messages: anthropicMessages,
         stream: true,
       };
@@ -200,7 +234,7 @@ export class AIClient {
       if (useThinking) {
         params.thinking = {
           type: 'enabled',
-          budget_tokens: config.THINKING_BUDGET_TOKENS,
+          budget_tokens: thinkingBudget,
         };
       }
 
@@ -209,9 +243,12 @@ export class AIClient {
       const MAX_RETRIES = 3;
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
+          // Check abort signal before each attempt
+          if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
           stream = await client.messages.create(params as any);
           break;
         } catch (retryErr: any) {
+          if (retryErr?.name === 'AbortError') throw retryErr;
           const status = retryErr?.status;
           if ((status === 529 || status === 503) && attempt < MAX_RETRIES) {
             const delay = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
@@ -226,6 +263,8 @@ export class AIClient {
       // Track usage
       let inputTokens = 0;
       let outputTokens = 0;
+      let cacheReadTokens = 0;
+      let cacheCreationTokens = 0;
 
       // Accumulate tool_use input JSON across deltas
       let currentToolId = '';
@@ -233,8 +272,13 @@ export class AIClient {
       let toolInputJson = '';
 
       for await (const event of stream as any) {
+        // Check abort signal during streaming
+        if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
         if (event.type === 'message_start') {
           inputTokens = event.message?.usage?.input_tokens || 0;
+          cacheReadTokens = event.message?.usage?.cache_read_input_tokens || 0;
+          cacheCreationTokens = event.message?.usage?.cache_creation_input_tokens || 0;
         } else if (event.type === 'content_block_start') {
           if (event.content_block?.type === 'tool_use') {
             currentToolId = event.content_block.id;
@@ -277,6 +321,10 @@ export class AIClient {
         }
       }
 
+      if (cacheReadTokens || cacheCreationTokens) {
+        logger.debug({ cacheReadTokens, cacheCreationTokens }, 'Prompt cache stats');
+      }
+
       options.onUsage?.({
         tokensIn: inputTokens,
         tokensOut: outputTokens,
@@ -285,7 +333,11 @@ export class AIClient {
       });
 
       release(true);
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        release(true); // Not a key failure
+        return;
+      }
       logger.error({ err, keyId: key.id, model }, 'Anthropic API error');
       release(false);
       throw err;
@@ -534,7 +586,7 @@ export class AIClient {
     model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS);
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch);
     const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
 
     const { key, release } = await this.keyPool.acquire('google', options.onQueuePosition);
@@ -558,9 +610,15 @@ export class AIClient {
         }
       }
 
-      if (config.ENABLE_EXTENDED_THINKING) {
+      // Resolve thinking: per-session override > global config
+      const useThinking = options.thinkingEnabled != null
+        ? options.thinkingEnabled
+        : config.ENABLE_EXTENDED_THINKING;
+      const thinkingBudget = options.thinkingBudget || config.THINKING_BUDGET_TOKENS;
+
+      if (useThinking) {
         geminiConfig.thinkingConfig = {
-          thinkingBudget: config.THINKING_BUDGET_TOKENS,
+          thinkingBudget,
         };
       }
 
@@ -605,6 +663,20 @@ export class AIClient {
       throw err;
     }
   }
+}
+
+/**
+ * Wrap a system prompt string into Anthropic's cached system block format.
+ * Marks the system prompt as ephemeral so Anthropic caches it across turns.
+ */
+function applyPromptCaching(systemPrompt: string): any[] {
+  return [
+    {
+      type: 'text',
+      text: systemPrompt,
+      cache_control: { type: 'ephemeral' },
+    },
+  ];
 }
 
 /**

@@ -5,7 +5,7 @@ export interface RepoContext {
   files: { path: string; content: string }[];
 }
 
-export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean, scriptEnabled?: boolean, devToolsEnabled?: boolean): string {
+export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean, scriptEnabled?: boolean, devToolsEnabled?: boolean, webSearchEnabled?: boolean): string {
   let prompt = `You are a software engineering assistant on Discord. Write, edit, review, debug, and explain code in any language.
 
 **Response style — this is critical:**
@@ -77,6 +77,16 @@ Use these to:
 - Use git to inspect history, create branches, and commit changes
 - Push and pull from GitHub remotes (requires GITHUB_TOKEN to be configured)
 - Run any CLI tool available in the environment`;
+  }
+
+  if (webSearchEnabled) {
+    prompt += `
+
+You have web tools to find current information:
+- \`web_search\`: Search the web via Brave Search. Use when you need up-to-date docs, release notes, API references, or facts beyond your training data.
+- \`web_fetch\`: Fetch the full text content of a web page. Use after web_search to read a specific result.
+
+Use web_search proactively when the user asks about recent events, new library versions, or things that may have changed since your knowledge cutoff.`;
   }
 
   if (repoContext) {

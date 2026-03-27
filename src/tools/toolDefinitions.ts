@@ -191,6 +191,43 @@ export const DEV_TOOLS: ToolDefinition[] = [
 ];
 
 /**
+ * Web search and fetch tools.
+ * Available when ENABLE_WEB_SEARCH is true and BRAVE_SEARCH_API_KEY is set.
+ */
+export const WEB_TOOLS: ToolDefinition[] = [
+  {
+    name: 'web_search',
+    description:
+      'Search the web using Brave Search. Returns a list of results with titles, URLs, and descriptions. Use when you need current information, documentation, or facts that may not be in your training data.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query (e.g. "Next.js 15 release notes", "how to use Redis streams")',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'web_fetch',
+    description:
+      'Fetch the text content of a web page. Use after web_search to read a specific result in full. Returns extracted text content (HTML stripped), truncated to 50KB.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to fetch (must start with http:// or https://)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+];
+
+/**
  * Convert Anthropic-format tool definitions to Gemini FunctionDeclaration format.
  */
 export function toGeminiFunctionDeclarations(tools: ToolDefinition[]) {
