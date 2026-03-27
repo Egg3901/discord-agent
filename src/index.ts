@@ -13,6 +13,7 @@ import { createRepoCommand } from './bot/commands/repo.js';
 import { createConfigCommand } from './bot/commands/config.js';
 import { createModelCommand } from './bot/commands/model.js';
 import { createHelpCommand } from './bot/commands/help.js';
+import { createUsageCommand } from './bot/commands/usage.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
@@ -44,6 +45,7 @@ async function main() {
     createConfigCommand(),
     createModelCommand(sessionManager),
     createHelpCommand(),
+    createUsageCommand(),
   ];
 
   const commandMap = new Map<string, CommandHandler>();

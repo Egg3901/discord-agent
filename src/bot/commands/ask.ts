@@ -1,9 +1,10 @@
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
-import type { AIClient } from '../../claude/aiClient.js';
+import type { AIClient, UsageInfo } from '../../claude/aiClient.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { formatApiError } from '../../utils/errors.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { splitMessage } from '../../utils/chunks.js';
+import { logUsage } from '../../storage/database.js';
 import { logger } from '../../utils/logger.js';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
@@ -47,7 +48,18 @@ export function createAskCommand(
       try {
         const response = await aiClient.getResponse([
           { role: 'user', content: question },
-        ]);
+        ], {
+          onUsage: (usage: UsageInfo) => {
+            logUsage({
+              userId: interaction.user.id,
+              keyId: usage.keyId,
+              tokensIn: usage.tokensIn,
+              tokensOut: usage.tokensOut,
+              model: usage.model,
+              costUsd: usage.costUsd,
+            });
+          },
+        });
 
         const chunks = splitMessage(response);
         await interaction.editReply(chunks[0]);

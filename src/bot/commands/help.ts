@@ -23,6 +23,7 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 > \`/model <model> [scope]\` — Switch Claude model (this session or default)
 > \`/session end\` — End your current session
 > \`/session status\` — View your active sessions
+> \`/usage [period] [all]\` — View your token usage and costs
 > \`/help\` — This message
 
 **Admin Commands (requires Administrator):**
