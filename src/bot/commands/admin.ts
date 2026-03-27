@@ -6,6 +6,7 @@ import {
 import { isAdmin, addAllowedRole, removeAllowedRole, listAllowedRoles } from '../middleware/permissions.js';
 import { KeyPool } from '../../keys/keyPool.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
+import { Octokit } from '@octokit/rest';
 import { config } from '../../config.js';
 import type { CommandHandler } from './types.js';
 
@@ -78,6 +79,9 @@ export function createAdminCommand(
           .addStringOption((opt) =>
             opt.setName('token').setDescription('GitHub personal access token (ghp_...)').setRequired(true),
           ),
+      )
+      .addSubcommand((sub) =>
+        sub.setName('verifygittoken').setDescription('Check if the GitHub token is set and valid'),
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
@@ -191,6 +195,39 @@ export function createAdminCommand(
           content: `GitHub token set: \`${masked}\`. It will be used for all future repo fetches.`,
           ephemeral: true,
         });
+      }
+
+      if (subcommand === 'verifygittoken') {
+        if (!config.GITHUB_TOKEN) {
+          await interaction.reply({
+            content: '**GitHub Token:** Not set.\nUse `/admin setgittoken` or set the `GITHUB_TOKEN` environment variable.',
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const masked = config.GITHUB_TOKEN.slice(0, 6) + '...' + config.GITHUB_TOKEN.slice(-4);
+        await interaction.deferReply({ ephemeral: true });
+
+        try {
+          const octokit = new Octokit({ auth: config.GITHUB_TOKEN, request: { timeout: 10_000 } });
+          const { data: user } = await octokit.users.getAuthenticated();
+          const scopes = (await octokit.request('GET /user')).headers['x-oauth-scopes'] || 'unknown';
+          await interaction.editReply(
+            `**GitHub Token:** Valid\n` +
+            `**User:** ${user.login}\n` +
+            `**Token:** \`${masked}\`\n` +
+            `**Scopes:** \`${scopes}\``,
+          );
+        } catch (err: any) {
+          const status = err.status || 'unknown';
+          const msg = err.message || 'Unknown error';
+          await interaction.editReply(
+            `**GitHub Token:** Invalid\n` +
+            `**Token:** \`${masked}\`\n` +
+            `**Error:** ${status} — ${msg}`,
+          );
+        }
       }
 
       if (subcommand === 'roles') {
