@@ -16,12 +16,16 @@ src/
   config.ts     - Runtime-mutable config (env + admin-set values)
   bot/          - Discord.js client, slash commands, event handlers, middleware
     commands/   - Slash command handlers (ask, code, session, repo, admin, config, model, help)
-    events/     - ready, interactionCreate, messageCreate (thread message handling)
+    events/     - ready, interactionCreate, messageCreate (thread message handling + agent loop)
     middleware/ - permissions (role-based ACL), rateLimiter (per-user)
-  claude/       - AI client (multi-provider), context builder, response streaming
+  claude/       - AI client (multi-provider), context builder, response streaming, agent loop
+    agentLoop.ts - Multi-step tool-use orchestration loop
+  tools/        - Tool definitions and executor for agentic mode
+    toolDefinitions.ts - read_file, list_directory, search_code schemas (Anthropic + Gemini formats)
+    toolExecutor.ts    - Executes tool calls against GitHub API via RepoFetcher
   keys/         - API key pool: weighted round-robin, health tracking, SQLite persistence
   sessions/     - Thread-based session lifecycle, auto-expiry, message history
-  github/       - Octokit-based repo file fetching
+  github/       - Octokit-based repo file fetching, directory listing, code search
   storage/      - SQLite schema + migrations (api_keys, sessions, usage_log, allowed_roles)
   utils/        - Logger (pino), error types, Discord message chunking
 ```
@@ -75,19 +79,19 @@ Copy `.env.example` to `.env`. Required: `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`. A
 - `nanoid` v5 is ESM-only. Don't try to use `require()` anywhere.
 - SQLite is single-writer. The bot runs single-process, so this is fine. Don't add clustering without addressing this.
 
-## Parity Gaps vs Claude Code / Codex
+## Implemented Agentic Features
 
-The following capabilities exist in agentic coding tools (Claude Code, Codex, etc.) but are missing or limited here. This is the roadmap for feature parity:
+These features bring the bot closer to parity with tools like Claude Code and Codex:
 
-### High Priority
+1. **Tool Use / Agentic Mode** — When a GitHub repo is attached (via `/repo` or `/code repo:`), the AI has access to `read_file`, `list_directory`, and `search_code` tools that operate on the repo via GitHub API. See `src/tools/`.
 
-1. **Tool Use / Agentic Mode** — Agentic tools can read files, edit files, run commands, and search code. This bot is chat-only with no tool execution. Adding tool_use with sandboxed execution would be the single biggest capability leap. Design: define tools (read_file, edit_file, run_command, search), execute in a sandbox, return results in the conversation loop.
+2. **Extended Thinking** — Supports Anthropic extended thinking and Gemini thinking mode. Controlled via `ENABLE_EXTENDED_THINKING` and `THINKING_BUDGET_TOKENS` config. Disabled by default. Enable via `/config set ENABLE_EXTENDED_THINKING true`.
 
-2. **Extended Thinking** — Agentic tools use chain-of-thought reasoning for complex problems. The bot should pass thinking/reasoning parameters for models that support it (Anthropic extended thinking, Gemini thinking mode) to improve code quality on hard problems.
+3. **Structured Diffs** — System prompt instructs the AI to use SEARCH/REPLACE blocks for code changes instead of full file dumps. See `src/claude/contextBuilder.ts`.
 
-3. **Structured Diffs** — Agentic tools show precise file edits (search/replace, unified diff). The bot returns full code blocks. Adding diff-aware output formatting would significantly improve usability for code modification tasks.
+4. **Multi-step Agent Loops** — When tools are available, the bot runs an iterative loop: stream AI response -> execute tool calls -> feed results back -> repeat until done or max iterations. Status updates (tool calls) appear as quoted messages in the Discord thread. See `src/claude/agentLoop.ts`.
 
-4. **Multi-step Agent Loops** — Agentic tools run iterative loops (read -> think -> edit -> verify). The bot does single-turn responses. Supporting agent loops with intermediate status updates in Discord threads would enable complex multi-file tasks.
+## Remaining Parity Gaps
 
 ### Medium Priority
 

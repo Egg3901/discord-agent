@@ -37,7 +37,7 @@ async function main() {
   // Create commands
   const commands: CommandHandler[] = [
     createAskCommand(aiClient, rateLimiter),
-    createCodeCommand(sessionManager, aiClient, rateLimiter),
+    createCodeCommand(sessionManager, aiClient, rateLimiter, repoFetcher),
     createSessionCommand(sessionManager),
     createAdminCommand(keyPool, sessionManager),
     createRepoCommand(sessionManager, repoFetcher),
@@ -60,7 +60,7 @@ async function main() {
   // Wire up event handlers
   handleReady(client);
   handleInteractionCreate(client, commandMap);
-  handleMessageCreate(client, sessionManager, aiClient, rateLimiter);
+  handleMessageCreate(client, sessionManager, aiClient, rateLimiter, repoFetcher);
 
   // Login
   await client.login(config.DISCORD_TOKEN);

@@ -30,6 +30,11 @@ class Config {
   MAX_REQUESTS_PER_MINUTE = parseInt(optional('MAX_REQUESTS_PER_MINUTE', '10'), 10);
   MAX_CONTEXT_TOKENS = parseInt(optional('MAX_CONTEXT_TOKENS', '100000'), 10);
 
+  // Agent mode
+  ENABLE_EXTENDED_THINKING = process.env['ENABLE_EXTENDED_THINKING'] === 'true';
+  THINKING_BUDGET_TOKENS = parseInt(optional('THINKING_BUDGET_TOKENS', '10000'), 10);
+  MAX_AGENT_ITERATIONS = parseInt(optional('MAX_AGENT_ITERATIONS', '10'), 10);
+
   // Access control: managed via /admin allowrole and stored in database
   // Empty = everyone can use the bot
 
@@ -53,6 +58,9 @@ class Config {
     MAX_SESSIONS_PER_USER: { type: 'number', description: 'Max concurrent sessions per user' },
     MAX_REQUESTS_PER_MINUTE: { type: 'number', description: 'Max requests per user per minute' },
     MAX_CONTEXT_TOKENS: { type: 'number', description: 'Max context window tokens' },
+    ENABLE_EXTENDED_THINKING: { type: 'string', description: 'Enable extended thinking for complex tasks (true/false)' },
+    THINKING_BUDGET_TOKENS: { type: 'number', description: 'Token budget for extended thinking' },
+    MAX_AGENT_ITERATIONS: { type: 'number', description: 'Max tool-use iterations per agent loop' },
   };
 
   /**
@@ -70,6 +78,8 @@ class Config {
         return { success: false, error: `\`${key}\` must be a positive number.` };
       }
       (this as any)[key] = num;
+    } else if (key === 'ENABLE_EXTENDED_THINKING') {
+      (this as any)[key] = value === 'true';
     } else {
       (this as any)[key] = value;
     }

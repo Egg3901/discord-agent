@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { getDatabase } from '../storage/database.js';
 import type { Session } from './session.js';
 import type { RepoContext } from '../claude/contextBuilder.js';
-import type { ConversationMessage } from '../claude/anthropicClient.js';
+import type { ConversationMessage } from '../claude/aiClient.js';
 
 const STALE_SESSION_MS = 30 * 60 * 1000; // 30 minutes
 const MAX_MESSAGES_PER_SESSION = 100;
