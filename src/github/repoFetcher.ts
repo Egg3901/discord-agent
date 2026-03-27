@@ -11,11 +11,16 @@ const MAX_FILE_SIZE = 100_000; // 100KB per file
 const MAX_TOTAL_FILES = 20;
 
 export class RepoFetcher {
-  private octokit: Octokit;
-
-  constructor() {
-    this.octokit = new Octokit({
+  /**
+   * Returns an Octokit instance using the current GITHUB_TOKEN from config.
+   * Re-reads on every call so runtime token changes (via /admin or /config) take effect.
+   */
+  private get octokit(): Octokit {
+    return new Octokit({
       auth: config.GITHUB_TOKEN || undefined,
+      request: {
+        timeout: 15_000, // 15 second timeout per request
+      },
     });
   }
 
@@ -164,6 +169,40 @@ export class RepoFetcher {
   }
 
   /**
+   * List repositories accessible to the authenticated user.
+   * Returns repo full names (owner/repo) for use in autocomplete.
+   * Requires GITHUB_TOKEN to be configured.
+   */
+  async listUserRepos(query?: string): Promise<{ fullName: string; description: string | null; isPrivate: boolean }[]> {
+    if (!config.GITHUB_TOKEN) return [];
+
+    try {
+      const { data } = await this.octokit.repos.listForAuthenticatedUser({
+        sort: 'updated',
+        per_page: 25,
+        type: 'all',
+      });
+
+      let repos = data.map((r) => ({
+        fullName: r.full_name,
+        description: r.description,
+        isPrivate: r.private,
+      }));
+
+      // Filter by query if provided
+      if (query) {
+        const q = query.toLowerCase();
+        repos = repos.filter((r) => r.fullName.toLowerCase().includes(q));
+      }
+
+      return repos.slice(0, 25); // Discord autocomplete limit
+    } catch (err) {
+      logger.warn({ err }, 'Failed to list user repos');
+      return [];
+    }
+  }
+
+  /**
    * Get the file tree of a repository.
    */
   async getTree(owner: string, repo: string): Promise<string[]> {
@@ -177,5 +216,52 @@ export class RepoFetcher {
     return tree.tree
       .filter((item) => item.type === 'blob' && item.path)
       .map((item) => item.path!);
+  }
+
+  /**
+   * List entries (files and directories) at a single directory level.
+   */
+  async listDirectory(
+    owner: string,
+    repo: string,
+    path: string,
+  ): Promise<string[]> {
+    const { data } = await this.octokit.repos.getContent({
+      owner,
+      repo,
+      path: path || '',
+    });
+
+    if (!Array.isArray(data)) {
+      return [`[file] ${(data as any).name}`];
+    }
+
+    return (data as any[]).map(
+      (entry: { name: string; type: string }) =>
+        `${entry.type === 'dir' ? '[dir]  ' : '[file] '}${entry.name}`,
+    );
+  }
+
+  /**
+   * Search for code in a repository using the GitHub code search API.
+   * Returns up to 10 matching file paths with line snippets.
+   */
+  async searchCode(
+    owner: string,
+    repo: string,
+    query: string,
+  ): Promise<{ path: string; snippet: string }[]> {
+    const { data } = await this.octokit.search.code({
+      q: `${query} repo:${owner}/${repo}`,
+      per_page: 10,
+      headers: {
+        accept: 'application/vnd.github.text-match+json',
+      },
+    });
+
+    return data.items.map((item: any) => ({
+      path: item.path,
+      snippet: item.text_matches?.[0]?.fragment || '(no preview)',
+    }));
   }
 }

@@ -1,24 +1,34 @@
 import {
   SlashCommandBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   type ChatInputCommandInteraction,
+  type AutocompleteInteraction,
   type TextChannel,
   type ThreadChannel,
 } from 'discord.js';
+import { generateImprovedPrompt } from './improve.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
-import { AnthropicClient } from '../../claude/anthropicClient.js';
+import { AIClient } from '../../claude/aiClient.js';
 import { ResponseStreamer } from '../../claude/responseFormatter.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { formatApiError } from '../../utils/errors.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { logger } from '../../utils/logger.js';
+import { RepoFetcher } from '../../github/repoFetcher.js';
+import { ToolExecutor } from '../../tools/toolExecutor.js';
+import { runAgentLoop } from '../../claude/agentLoop.js';
+import { config } from '../../config.js';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
 
 export function createCodeCommand(
   sessionManager: SessionManager,
-  anthropicClient: AnthropicClient,
+  aiClient: AIClient,
   rateLimiter: RateLimiter,
+  repoFetcher: RepoFetcher,
 ): CommandHandler {
   return {
     data: new SlashCommandBuilder()
@@ -34,8 +44,24 @@ export function createCodeCommand(
         opt
           .setName('repo')
           .setDescription('GitHub repository URL for context (optional)')
-          .setRequired(false),
+          .setRequired(false)
+          .setAutocomplete(true),
       ),
+
+    async autocomplete(interaction: AutocompleteInteraction) {
+      const focused = interaction.options.getFocused();
+      try {
+        const repos = await repoFetcher.listUserRepos(focused || undefined);
+        await interaction.respond(
+          repos.map((r) => ({
+            name: `${r.fullName}${r.isPrivate ? ' 🔒' : ''}${r.description ? ` — ${r.description}` : ''}`.slice(0, 100),
+            value: `https://github.com/${r.fullName}`,
+          })),
+        );
+      } catch {
+        await interaction.respond([]);
+      }
+    },
 
     async execute(interaction: ChatInputCommandInteraction) {
       if (!isAllowed(interaction.member as GuildMember | null)) {
@@ -57,7 +83,53 @@ export function createCodeCommand(
       const prompt = interaction.options.getString('prompt', true);
       const repoUrl = interaction.options.getString('repo');
 
-      await interaction.deferReply();
+      // Defer ephemeral so we can offer prompt improvement before starting publicly
+      await interaction.deferReply({ ephemeral: true });
+
+      let finalPrompt = prompt;
+      try {
+        const improved = await generateImprovedPrompt(aiClient, prompt);
+
+        if (improved && improved !== prompt) {
+          const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId('improve_original')
+              .setLabel('Use Original')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId('improve_improved')
+              .setLabel('Use Improved')
+              .setStyle(ButtonStyle.Primary),
+          );
+
+          const offerMsg = await interaction.editReply({
+            content: `**Original prompt:**\n> ${prompt.replace(/\n/g, '\n> ')}\n\n**Suggested improvement:**\n> ${improved.replace(/\n/g, '\n> ')}\n\nUse the improved version?`,
+            components: [row],
+          });
+
+          try {
+            const btn = await offerMsg.awaitMessageComponent({
+              time: 30_000,
+              filter: (i) => i.user.id === interaction.user.id,
+            });
+            if (btn.customId === 'improve_improved') {
+              finalPrompt = improved;
+            }
+            await btn.update({
+              content: `Using **${btn.customId === 'improve_improved' ? 'improved' : 'original'}** prompt — starting session...`,
+              components: [],
+            });
+          } catch {
+            // Timeout — proceed with original
+            await interaction.editReply({ content: 'No response — using original prompt.', components: [] });
+          }
+        } else {
+          await interaction.editReply({ content: 'Starting session...', components: [] });
+        }
+      } catch {
+        // Improvement failed silently — continue with original
+        await interaction.editReply({ content: 'Starting session...', components: [] });
+      }
 
       try {
         const channel = interaction.channel;
@@ -66,52 +138,135 @@ export function createCodeCommand(
           return;
         }
 
-        const threadName = prompt.slice(0, 95) + (prompt.length > 95 ? '...' : '');
+        const threadName = finalPrompt.slice(0, 95) + (finalPrompt.length > 95 ? '...' : '');
         const thread = await (channel as TextChannel).threads.create({
-          name: `🤖 ${threadName}`,
+          name: `\u{1F916} ${threadName}`,
           autoArchiveDuration: 60,
           reason: `Coding session started by ${interaction.user.tag}`,
         });
+
+        // Parse repo if provided
+        let repoOwner: string | undefined;
+        let repoName: string | undefined;
+        let repoContext: { repoUrl: string; files: { path: string; content: string }[] } | undefined;
+
+        if (repoUrl) {
+          try {
+            const parsed = repoFetcher.parseGitHubUrl(repoUrl);
+            repoOwner = parsed.owner;
+            repoName = parsed.repo;
+
+            // When tools are available, fetch only tree listing + README for initial context
+            // instead of 20 files — the AI can read individual files on demand via tools
+            const tree = await repoFetcher.getTree(repoOwner, repoName);
+            const readmeFiles = await repoFetcher.fetchFiles(repoOwner, repoName, ['README.md', 'readme.md']);
+            repoContext = {
+              repoUrl,
+              files: [
+                { path: '[TREE]', content: tree.join('\n') },
+                ...readmeFiles,
+              ],
+            };
+          } catch (err) {
+            logger.warn({ err, repoUrl }, 'Failed to fetch repo for /code');
+            await thread.send('> Failed to load repository context. Continuing without it.');
+            repoOwner = undefined;
+            repoName = undefined;
+            repoContext = undefined;
+          }
+        }
 
         const session = sessionManager.createSession(
           interaction.user.id,
           thread.id,
           channel.id,
+          repoContext,
         );
+
+        // Set repo owner/name on session for tool executor
+        if (repoOwner && repoName) {
+          session.repoOwner = repoOwner;
+          session.repoName = repoName;
+        }
 
         sessionManager.addMessage(thread.id, {
           role: 'user',
-          content: prompt,
+          content: finalPrompt,
         });
 
-        await interaction.editReply(
-          `Session started! Continue the conversation in <#${thread.id}>`,
-        );
+        await interaction.followUp({
+          content: `Session started! Continue the conversation in <#${thread.id}>${repoUrl ? ` (repo: ${repoOwner}/${repoName})` : ''}`,
+          ephemeral: false,
+        });
 
         const thinkingMsg = await thread.send('Thinking...');
         const streamer = new ResponseStreamer(thread, thinkingMsg);
 
         try {
-          let fullResponse = '';
-          for await (const chunk of anthropicClient.streamResponse(
-            session.messages,
-            {
-              repoContext: session.repoContext,
-              modelOverride: session.modelOverride,
-              onQueuePosition: (pos) => {
-                thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
-              },
-            },
-          )) {
-            fullResponse += chunk;
-            await streamer.push(chunk);
-          }
-          await streamer.finish();
+          const hasRepo = repoOwner && repoName;
+          const hasTools = hasRepo || config.ENABLE_SCRIPT_EXECUTION;
 
-          sessionManager.addMessage(thread.id, {
-            role: 'assistant',
-            content: fullResponse,
-          });
+          if (hasTools) {
+            // Agentic mode
+            const toolExecutor = new ToolExecutor(
+              hasRepo ? repoFetcher : null,
+              repoOwner || '',
+              repoName || '',
+              session.id,
+            );
+            const result = await runAgentLoop(
+              aiClient,
+              session.messages,
+              toolExecutor,
+              {
+                repoContext: session.repoContext,
+                modelOverride: session.modelOverride,
+                enableRepoTools: !!hasRepo,
+                onQueuePosition: (pos) => {
+                  thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+                },
+              },
+              {
+                onTextChunk: (text) => streamer.push(text),
+                onToolStart: async (name, input) => {
+                  const inputSummary = Object.entries(input)
+                    .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
+                    .join(', ');
+                  await thread.send(`> \u{1F527} \`${name}\` ${inputSummary}`);
+                },
+                onToolEnd: async () => {},
+                onThinking: async () => {},
+              },
+            );
+
+            await streamer.finish();
+
+            for (const msg of result.newMessages) {
+              sessionManager.addMessage(thread.id, msg);
+            }
+          } else {
+            // Simple streaming mode
+            let fullResponse = '';
+            for await (const chunk of aiClient.streamText(
+              session.messages,
+              {
+                repoContext: session.repoContext,
+                modelOverride: session.modelOverride,
+                onQueuePosition: (pos) => {
+                  thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+                },
+              },
+            )) {
+              fullResponse += chunk;
+              await streamer.push(chunk);
+            }
+            await streamer.finish();
+
+            sessionManager.addMessage(thread.id, {
+              role: 'assistant',
+              content: fullResponse,
+            });
+          }
         } catch (err) {
           logger.error({ err }, 'Error streaming in /code');
           await streamer.sendError(formatApiError(err));
@@ -121,7 +276,7 @@ export function createCodeCommand(
         const msg = err instanceof Error && 'userMessage' in err
           ? (err as any).userMessage
           : 'Failed to start a coding session. Please try again.';
-        await interaction.editReply(msg);
+        await interaction.followUp({ content: msg, ephemeral: true });
       }
     },
   };

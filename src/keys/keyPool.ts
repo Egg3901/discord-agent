@@ -121,6 +121,13 @@ export class KeyPool {
   }
 
   /**
+   * Check if any keys exist for a given provider.
+   */
+  hasKeysForProvider(provider: Provider): boolean {
+    return [...this.keys.values()].some((k) => k.provider === provider);
+  }
+
+  /**
    * Acquire a key for a specific provider. If no key is available, queues the request.
    */
   async acquire(

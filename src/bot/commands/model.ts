@@ -7,7 +7,12 @@ import { SessionManager } from '../../sessions/sessionManager.js';
 import type { CommandHandler } from './types.js';
 
 const AVAILABLE_MODELS = [
-  // Claude (Anthropic)
+  // Claude Code (uses host's CLI login / Max plan, or pool API key)
+  { name: 'Claude Code (default)', value: 'claude-code' },
+  { name: 'Claude Code — Opus', value: 'claude-code-opus' },
+  { name: 'Claude Code — Sonnet', value: 'claude-code-sonnet' },
+  { name: 'Claude Code — Haiku', value: 'claude-code-haiku' },
+  // Claude (Anthropic API)
   { name: 'Claude Opus 4.6', value: 'claude-opus-4-6' },
   { name: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6' },
   { name: 'Claude Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
@@ -47,7 +52,9 @@ export function createModelCommand(
       const model = interaction.options.getString('model', true);
       const scope = interaction.options.getString('scope') || 'session';
       const modelLabel = AVAILABLE_MODELS.find((m) => m.value === model)?.name ?? model;
-      const provider = model.startsWith('gemini-') ? 'Google' : 'Anthropic';
+      const provider = model === 'claude-code' || model.startsWith('claude-code-')
+        ? 'Claude Code'
+        : model.startsWith('gemini-') ? 'Google' : 'Anthropic';
 
       if (scope === 'default') {
         config.ANTHROPIC_MODEL = model;

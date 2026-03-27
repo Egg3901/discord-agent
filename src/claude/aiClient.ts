@@ -1,51 +1,162 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { nanoid } from 'nanoid';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
 import { buildSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
+import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations } from '../tools/toolDefinitions.js';
 import type { Provider } from '../keys/types.js';
+
+// --- Content block types (provider-agnostic) ---
+
+export interface TextBlock {
+  type: 'text';
+  text: string;
+}
+
+export interface ToolUseBlock {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface ToolResultBlock {
+  type: 'tool_result';
+  tool_use_id: string;
+  content: string;
+}
+
+export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
 
 export interface ConversationMessage {
   role: 'user' | 'assistant';
-  content: string;
+  content: string | ContentBlock[];
+}
+
+// --- Stream event types ---
+
+export interface TextChunkEvent {
+  type: 'text';
+  text: string;
+}
+
+export interface ToolUseEvent {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface ThinkingEvent {
+  type: 'thinking';
+}
+
+export interface StopEvent {
+  type: 'stop';
+  stopReason: string;
+}
+
+export type AIStreamEvent = TextChunkEvent | ToolUseEvent | ThinkingEvent | StopEvent;
+
+export interface UsageInfo {
+  tokensIn: number;
+  tokensOut: number;
+  costUsd?: number;
+  model: string;
+  keyId: string;
 }
 
 export interface StreamOptions {
   repoContext?: RepoContext;
   modelOverride?: string;
   onQueuePosition?: (position: number) => void;
+  enableTools?: boolean;
+  enableRepoTools?: boolean;
+  /** Called when usage info is available after a response completes */
+  onUsage?: (usage: UsageInfo) => void;
+  /** Per-session thinking override (null/undefined = use global config) */
+  thinkingEnabled?: boolean | null;
+  thinkingBudget?: number | null;
+  /** Abort signal to cancel the in-flight request */
+  signal?: AbortSignal;
+  /** Whether web search tools are available */
+  enableWebSearch?: boolean;
+  /** Image attachments to include with the next user message */
+  imageAttachments?: { mediaType: string; base64Data: string }[];
 }
 
 /**
- * Model-to-provider mapping. Determines which API to call based on model name.
+ * Model-to-provider mapping.
  */
 const GOOGLE_MODEL_PREFIXES = ['gemini-'];
+const CLAUDE_CODE_MODEL = 'claude-code';
 
 export function getProviderForModel(model: string): Provider {
+  if (model === CLAUDE_CODE_MODEL || model.startsWith('claude-code-')) {
+    return 'claude-code';
+  }
   if (GOOGLE_MODEL_PREFIXES.some((p) => model.startsWith(p))) {
     return 'google';
   }
   return 'anthropic';
 }
 
+/**
+ * Build the tool list based on what's available (repo tools, script tool).
+ */
+function getActiveTools(options: StreamOptions): import('../tools/toolDefinitions.js').ToolDefinition[] {
+  const tools = [];
+  if (options.enableRepoTools) {
+    tools.push(...AGENT_TOOLS);
+  }
+  if (config.ENABLE_SCRIPT_EXECUTION) {
+    tools.push(...SANDBOX_TOOLS);
+  }
+  if (config.ENABLE_DEV_TOOLS) {
+    tools.push(...DEV_TOOLS);
+  }
+  if (options.enableWebSearch) {
+    tools.push(...WEB_TOOLS);
+  }
+  return tools;
+}
+
 export class AIClient {
   constructor(private keyPool: KeyPool) {}
 
   /**
-   * Stream a response, routing to the correct provider based on model name.
+   * Stream structured events (text, tool_use, thinking, stop).
    */
   async *streamResponse(
     messages: ConversationMessage[],
     options: StreamOptions = {},
-  ): AsyncGenerator<string> {
+  ): AsyncGenerator<AIStreamEvent> {
     const model = options.modelOverride || config.ANTHROPIC_MODEL;
     const provider = getProviderForModel(model);
 
-    if (provider === 'google') {
+    if (provider === 'claude-code') {
+      yield* this.streamClaudeCode(messages, model, options);
+    } else if (provider === 'google') {
       yield* this.streamGemini(messages, model, options);
     } else {
       yield* this.streamAnthropic(messages, model, options);
+    }
+  }
+
+  /**
+   * Convenience: stream only text chunks (for simple non-agentic use like /ask).
+   */
+  async *streamText(
+    messages: ConversationMessage[],
+    options: StreamOptions = {},
+  ): AsyncGenerator<string> {
+    for await (const event of this.streamResponse(messages, options)) {
+      if (event.type === 'text') {
+        yield event.text;
+      }
     }
   }
 
@@ -54,7 +165,7 @@ export class AIClient {
     options: StreamOptions = {},
   ): Promise<string> {
     const chunks: string[] = [];
-    for await (const chunk of this.streamResponse(messages, options)) {
+    for await (const chunk of this.streamText(messages, options)) {
       chunks.push(chunk);
     }
     return chunks.join('');
@@ -66,9 +177,32 @@ export class AIClient {
     messages: ConversationMessage[],
     model: string,
     options: StreamOptions,
-  ): AsyncGenerator<string> {
-    const systemPrompt = buildSystemPrompt(options.repoContext);
+  ): AsyncGenerator<AIStreamEvent> {
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch);
     const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
+
+    // Convert messages to Anthropic format
+    const anthropicMessages = trimmed.map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content as any, // Anthropic SDK accepts string | ContentBlock[]
+    }));
+
+    // Inject image attachments into the last user message
+    if (options.imageAttachments?.length) {
+      const lastUser = [...anthropicMessages].reverse().find((m) => m.role === 'user');
+      if (lastUser) {
+        const textContent = typeof lastUser.content === 'string' ? lastUser.content : '';
+        const blocks: any[] = [];
+        for (const img of options.imageAttachments) {
+          blocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mediaType, data: img.base64Data },
+          });
+        }
+        blocks.push({ type: 'text', text: textContent || '(see attached image)' });
+        lastUser.content = blocks;
+      }
+    }
 
     const { key, release } = await this.keyPool.acquire('anthropic', options.onQueuePosition);
 
@@ -76,28 +210,372 @@ export class AIClient {
       const client = new Anthropic({ apiKey: key.apiKey });
       logger.debug({ model, keyId: key.id, provider: 'anthropic' }, 'Starting stream');
 
-      const stream = await client.messages.create({
-        model,
-        max_tokens: 4096,
-        system: systemPrompt,
-        messages: trimmed,
-        stream: true,
-      });
+      // Resolve thinking: per-session override > global config
+      const useThinking = options.thinkingEnabled != null
+        ? options.thinkingEnabled
+        : config.ENABLE_EXTENDED_THINKING;
+      const thinkingBudget = options.thinkingBudget || config.THINKING_BUDGET_TOKENS;
 
-      for await (const event of stream) {
-        if (
-          event.type === 'content_block_delta' &&
-          event.delta.type === 'text_delta'
-        ) {
-          yield event.delta.text;
+      const params: Record<string, any> = {
+        model,
+        max_tokens: useThinking ? thinkingBudget + 16384 : 16384,
+        system: applyPromptCaching(systemPrompt),
+        messages: anthropicMessages,
+        stream: true,
+      };
+
+      if (options.enableTools) {
+        const tools = getActiveTools(options);
+        if (tools.length > 0) {
+          params.tools = tools;
         }
       }
 
+      if (useThinking) {
+        params.thinking = {
+          type: 'enabled',
+          budget_tokens: thinkingBudget,
+        };
+      }
+
+      // Retry on transient 529/503 (overloaded) errors with exponential backoff
+      let stream: any;
+      const MAX_RETRIES = 3;
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          // Check abort signal before each attempt
+          if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+          stream = await client.messages.create(params as any);
+          break;
+        } catch (retryErr: any) {
+          if (retryErr?.name === 'AbortError') throw retryErr;
+          const status = retryErr?.status;
+          if ((status === 529 || status === 503) && attempt < MAX_RETRIES) {
+            const delay = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+            logger.warn({ attempt: attempt + 1, delay, status }, 'API overloaded, retrying');
+            await new Promise((r) => setTimeout(r, delay));
+            continue;
+          }
+          throw retryErr;
+        }
+      }
+
+      // Track usage
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let cacheReadTokens = 0;
+      let cacheCreationTokens = 0;
+
+      // Accumulate tool_use input JSON across deltas
+      let currentToolId = '';
+      let currentToolName = '';
+      let toolInputJson = '';
+
+      for await (const event of stream as any) {
+        // Check abort signal during streaming
+        if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+        if (event.type === 'message_start') {
+          inputTokens = event.message?.usage?.input_tokens || 0;
+          cacheReadTokens = event.message?.usage?.cache_read_input_tokens || 0;
+          cacheCreationTokens = event.message?.usage?.cache_creation_input_tokens || 0;
+        } else if (event.type === 'content_block_start') {
+          if (event.content_block?.type === 'tool_use') {
+            currentToolId = event.content_block.id;
+            currentToolName = event.content_block.name;
+            toolInputJson = '';
+          } else if (event.content_block?.type === 'thinking') {
+            yield { type: 'thinking' } as ThinkingEvent;
+          }
+        } else if (event.type === 'content_block_delta') {
+          if (event.delta?.type === 'text_delta') {
+            yield { type: 'text', text: event.delta.text } as TextChunkEvent;
+          } else if (event.delta?.type === 'input_json_delta') {
+            toolInputJson += event.delta.partial_json;
+          }
+          // thinking_delta — we emit a single 'thinking' event at block start, ignore deltas
+        } else if (event.type === 'content_block_stop') {
+          if (currentToolId && currentToolName) {
+            let input: Record<string, unknown> = {};
+            try {
+              input = JSON.parse(toolInputJson || '{}');
+            } catch {
+              logger.warn({ toolInputJson }, 'Failed to parse tool input JSON');
+            }
+            yield {
+              type: 'tool_use',
+              id: currentToolId,
+              name: currentToolName,
+              input,
+            } as ToolUseEvent;
+            currentToolId = '';
+            currentToolName = '';
+            toolInputJson = '';
+          }
+        } else if (event.type === 'message_delta') {
+          outputTokens = event.usage?.output_tokens || outputTokens;
+          yield {
+            type: 'stop',
+            stopReason: event.delta?.stop_reason || 'end_turn',
+          } as StopEvent;
+        }
+      }
+
+      if (cacheReadTokens || cacheCreationTokens) {
+        logger.debug({ cacheReadTokens, cacheCreationTokens }, 'Prompt cache stats');
+      }
+
+      options.onUsage?.({
+        tokensIn: inputTokens,
+        tokensOut: outputTokens,
+        model,
+        keyId: key.id,
+      });
+
       release(true);
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        release(true); // Not a key failure
+        return;
+      }
       logger.error({ err, keyId: key.id, model }, 'Anthropic API error');
       release(false);
       throw err;
+    }
+  }
+
+  // --- Claude Code (CLI subprocess) ---
+
+  /** Map of session thread IDs to Claude Code session IDs for conversation continuity. */
+  private claudeCodeSessions = new Map<string, string>();
+
+  private async *streamClaudeCode(
+    messages: ConversationMessage[],
+    model: string,
+    options: StreamOptions,
+  ): AsyncGenerator<AIStreamEvent> {
+    // Extract the last user message as the prompt
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+    if (!lastUserMsg) {
+      yield { type: 'text', text: 'No user message found.' } as TextChunkEvent;
+      yield { type: 'stop', stopReason: 'end_turn' } as StopEvent;
+      return;
+    }
+
+    let prompt: string;
+    if (typeof lastUserMsg.content === 'string') {
+      prompt = lastUserMsg.content;
+    } else {
+      prompt = lastUserMsg.content
+        .filter((b): b is TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n');
+    }
+
+    if (!prompt.trim()) {
+      yield { type: 'text', text: 'Empty prompt.' } as TextChunkEvent;
+      yield { type: 'stop', stopReason: 'end_turn' } as StopEvent;
+      return;
+    }
+
+    // The CLI will use its own login (e.g. Claude Max plan / OAuth).
+    // We do NOT pass a pool API key here — that would override the CLI's
+    // own auth and cause "credit balance too low" errors when pool keys
+    // have limited credits.
+    let apiKey: string | undefined;
+    let releaseKey: ((success: boolean) => void) | undefined;
+
+    try {
+      // Build CLI args
+      const cliArgs = [
+        '-p',
+        '--output-format', 'stream-json',
+        '--verbose',
+        '--dangerously-skip-permissions',
+      ];
+
+      // Pass model override to CLI (e.g. "claude-code-sonnet" -> "sonnet")
+      const cliModel = model.replace(/^claude-code-?/, '');
+      if (cliModel && cliModel !== 'claude-code') {
+        cliArgs.push('--model', cliModel);
+      }
+
+      // Resume previous Claude Code session if available (for conversation continuity)
+      const sessionKey = options.repoContext?.repoUrl || 'default';
+      const existingSessionId = this.claudeCodeSessions.get(sessionKey);
+      if (existingSessionId) {
+        cliArgs.push('--resume', existingSessionId);
+      }
+
+      cliArgs.push(prompt);
+
+      // Build env: use pool API key if available, otherwise inherit the
+      // host's Claude Code login (Max plan / OAuth) from the environment.
+      const env = { ...process.env };
+      if (apiKey) {
+        env.ANTHROPIC_API_KEY = apiKey;
+      }
+      // Pass GITHUB_TOKEN so the CLI can authenticate git operations
+      if (config.GITHUB_TOKEN) {
+        env.GITHUB_TOKEN = config.GITHUB_TOKEN;
+      }
+      // Allow overriding HOME so the CLI finds the correct ~/.claude/ login
+      if (config.CLAUDE_CODE_HOME) {
+        env.HOME = config.CLAUDE_CODE_HOME;
+      }
+
+      logger.debug({ provider: 'claude-code', sessionKey, resume: !!existingSessionId, hasApiKey: !!apiKey, home: env.HOME }, 'Starting Claude Code stream');
+
+      yield* this.spawnClaudeCodeProcess(cliArgs, sessionKey, env, options.onUsage);
+      releaseKey?.(true);
+    } catch (err) {
+      releaseKey?.(false);
+      throw err;
+    }
+  }
+
+  private async *spawnClaudeCodeProcess(
+    cliArgs: string[],
+    sessionKey: string,
+    env: Record<string, string | undefined>,
+    onUsage?: StreamOptions['onUsage'],
+  ): AsyncGenerator<AIStreamEvent> {
+    const proc: ChildProcess = spawn('claude', cliArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    });
+
+    let hasYieldedText = false;
+
+    // Create async iterable from stdout
+    const events = this.parseClaudeCodeStream(proc, sessionKey, onUsage);
+
+    for await (const event of events) {
+      if (event.type === 'text') hasYieldedText = true;
+      yield event;
+    }
+
+    if (!hasYieldedText) {
+      yield { type: 'text', text: '(No response from Claude Code)' } as TextChunkEvent;
+    }
+    yield { type: 'stop', stopReason: 'end_turn' } as StopEvent;
+  }
+
+  private async *parseClaudeCodeStream(
+    proc: ChildProcess,
+    sessionKey: string,
+    onUsage?: StreamOptions['onUsage'],
+  ): AsyncGenerator<AIStreamEvent> {
+    let buffer = '';
+
+    // Collect all data into a promise-based async iteration
+    const lines: string[] = [];
+    let resolveNext: ((done: boolean) => void) | null = null;
+
+    proc.stdout!.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString();
+      const parts = buffer.split('\n');
+      buffer = parts.pop() || '';
+      for (const line of parts) {
+        if (line.trim()) lines.push(line.trim());
+      }
+      if (resolveNext) {
+        const r = resolveNext;
+        resolveNext = null;
+        r(false);
+      }
+    });
+
+    let exited = false;
+    proc.on('close', () => {
+      exited = true;
+      // Process remaining buffer
+      if (buffer.trim()) {
+        lines.push(buffer.trim());
+        buffer = '';
+      }
+      if (resolveNext) {
+        const r = resolveNext;
+        resolveNext = null;
+        r(true);
+      }
+    });
+
+    proc.stderr!.on('data', (chunk: Buffer) => {
+      logger.debug({ stderr: chunk.toString() }, 'Claude Code stderr');
+    });
+
+    while (true) {
+      while (lines.length > 0) {
+        const line = lines.shift()!;
+        try {
+          const msg = JSON.parse(line);
+          // Capture usage from result event
+          if (msg.type === 'result' && onUsage) {
+            onUsage({
+              tokensIn: msg.total_input_tokens || msg.input_tokens || 0,
+              tokensOut: msg.total_output_tokens || msg.output_tokens || 0,
+              costUsd: msg.total_cost_usd || msg.cost_usd || undefined,
+              model: msg.model || 'claude-code',
+              keyId: 'claude-code',
+            });
+          }
+          const event = this.handleClaudeCodeMessage(msg, sessionKey);
+          if (event) yield event;
+        } catch {
+          // Not valid JSON, skip
+        }
+      }
+
+      if (exited) break;
+
+      // Wait for more data
+      await new Promise<boolean>((resolve) => {
+        resolveNext = resolve;
+      });
+    }
+  }
+
+  private handleClaudeCodeMessage(
+    msg: any,
+    sessionKey: string,
+  ): AIStreamEvent | null {
+    switch (msg.type) {
+      case 'system':
+        if (msg.subtype === 'init' && msg.session_id) {
+          this.claudeCodeSessions.set(sessionKey, msg.session_id);
+          logger.debug({ sessionId: msg.session_id }, 'Claude Code session initialized');
+        }
+        return null;
+
+      case 'assistant': {
+        // Detect auth errors from Claude Code
+        if (msg.error === 'authentication_failed') {
+          logger.error('Claude Code authentication failed — API key may be invalid');
+          return { type: 'text', text: 'Claude Code authentication failed. The API key may be invalid — try `/admin removekey` and `/admin addkey` with a fresh key.' } as TextChunkEvent;
+        }
+
+        // Extract text from content blocks
+        const content = msg.message?.content;
+        if (!Array.isArray(content)) return null;
+
+        const textParts = content
+          .filter((b: any) => b.type === 'text' && b.text)
+          .map((b: any) => b.text);
+
+        if (textParts.length > 0) {
+          return { type: 'text', text: textParts.join('') } as TextChunkEvent;
+        }
+        return null;
+      }
+
+      case 'result':
+        // The result event contains the final combined text, but we already
+        // streamed it via assistant messages, so skip to avoid duplication.
+        return null;
+
+      default:
+        return null;
     }
   }
 
@@ -107,8 +585,8 @@ export class AIClient {
     messages: ConversationMessage[],
     model: string,
     options: StreamOptions,
-  ): AsyncGenerator<string> {
-    const systemPrompt = buildSystemPrompt(options.repoContext);
+  ): AsyncGenerator<AIStreamEvent> {
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch);
     const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
 
     const { key, release } = await this.keyPool.acquire('google', options.onQueuePosition);
@@ -117,27 +595,66 @@ export class AIClient {
       const genai = new GoogleGenAI({ apiKey: key.apiKey });
       logger.debug({ model, keyId: key.id, provider: 'google' }, 'Starting stream');
 
-      // Convert messages to Gemini format
-      const geminiContents = trimmed.map((m) => ({
-        role: m.role === 'assistant' ? 'model' as const : 'user' as const,
-        parts: [{ text: m.content }],
-      }));
+      // Convert messages to Gemini format with proper function call/result parts
+      const geminiContents = toGeminiContents(trimmed);
+
+      const geminiConfig: Record<string, any> = {
+        systemInstruction: systemPrompt,
+        maxOutputTokens: 16384,
+      };
+
+      if (options.enableTools) {
+        const tools = getActiveTools(options);
+        if (tools.length > 0) {
+          geminiConfig.tools = [{ functionDeclarations: toGeminiFunctionDeclarations(tools) }];
+        }
+      }
+
+      // Resolve thinking: per-session override > global config
+      const useThinking = options.thinkingEnabled != null
+        ? options.thinkingEnabled
+        : config.ENABLE_EXTENDED_THINKING;
+      const thinkingBudget = options.thinkingBudget || config.THINKING_BUDGET_TOKENS;
+
+      if (useThinking) {
+        geminiConfig.thinkingConfig = {
+          thinkingBudget,
+        };
+      }
 
       const response = await genai.models.generateContentStream({
         model,
         contents: geminiContents,
-        config: {
-          systemInstruction: systemPrompt,
-          maxOutputTokens: 4096,
-        },
+        config: geminiConfig,
       });
 
+      let hasToolCalls = false;
       for await (const chunk of response) {
-        const text = chunk.text;
-        if (text) {
-          yield text;
+        // Gemini may return function calls
+        const parts = (chunk as any).candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.functionCall) {
+            hasToolCalls = true;
+            yield {
+              type: 'tool_use',
+              id: `gemini-${nanoid(12)}`,
+              name: part.functionCall.name,
+              input: part.functionCall.args || {},
+            } as ToolUseEvent;
+          } else if (part.text) {
+            yield { type: 'text', text: part.text } as TextChunkEvent;
+          }
         }
       }
+
+      yield { type: 'stop', stopReason: hasToolCalls ? 'tool_use' : 'end_turn' } as StopEvent;
+
+      options.onUsage?.({
+        tokensIn: 0,
+        tokensOut: 0,
+        model,
+        keyId: key.id,
+      });
 
       release(true);
     } catch (err) {
@@ -146,4 +663,87 @@ export class AIClient {
       throw err;
     }
   }
+}
+
+/**
+ * Wrap a system prompt string into Anthropic's cached system block format.
+ * Marks the system prompt as ephemeral so Anthropic caches it across turns.
+ */
+function applyPromptCaching(systemPrompt: string): any[] {
+  return [
+    {
+      type: 'text',
+      text: systemPrompt,
+      cache_control: { type: 'ephemeral' },
+    },
+  ];
+}
+
+/**
+ * Convert conversation messages to Gemini content format.
+ * Handles function call/result blocks properly instead of flattening to text.
+ */
+function toGeminiContents(
+  messages: { role: 'user' | 'assistant'; content: string | ContentBlock[] }[],
+): { role: 'user' | 'model'; parts: any[] }[] {
+  const contents: { role: 'user' | 'model'; parts: any[] }[] = [];
+
+  for (const m of messages) {
+    const role = m.role === 'assistant' ? 'model' as const : 'user' as const;
+
+    if (typeof m.content === 'string') {
+      contents.push({ role, parts: [{ text: m.content }] });
+      continue;
+    }
+
+    // Convert content blocks to Gemini parts
+    const parts: any[] = [];
+    for (const block of m.content) {
+      if (block.type === 'text') {
+        parts.push({ text: block.text });
+      } else if (block.type === 'tool_use') {
+        // Assistant's function call → Gemini functionCall part
+        parts.push({
+          functionCall: {
+            name: block.name,
+            args: block.input,
+          },
+        });
+      } else if (block.type === 'tool_result') {
+        // User's function result → Gemini functionResponse part
+        // Find the matching tool_use to get the function name
+        const toolName = findToolName(messages, block.tool_use_id);
+        parts.push({
+          functionResponse: {
+            name: toolName || 'unknown',
+            response: { result: block.content },
+          },
+        });
+      }
+    }
+
+    if (parts.length > 0) {
+      contents.push({ role, parts });
+    }
+  }
+
+  return contents;
+}
+
+/**
+ * Find the tool name for a given tool_use_id by searching previous messages.
+ */
+function findToolName(
+  messages: { role: 'user' | 'assistant'; content: string | ContentBlock[] }[],
+  toolUseId: string,
+): string | undefined {
+  for (const m of messages) {
+    if (typeof m.content === 'string') continue;
+    for (const block of m.content) {
+      if (block.type === 'tool_use' && block.id === toolUseId) {
+        return block.name;
+      }
+    }
+  }
+  return undefined;
 }

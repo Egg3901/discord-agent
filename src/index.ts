@@ -13,12 +13,17 @@ import { createRepoCommand } from './bot/commands/repo.js';
 import { createConfigCommand } from './bot/commands/config.js';
 import { createModelCommand } from './bot/commands/model.js';
 import { createHelpCommand } from './bot/commands/help.js';
+import { createUsageCommand } from './bot/commands/usage.js';
+import { createVersionCommand } from './bot/commands/version.js';
+import { createThinkingCommand } from './bot/commands/thinking.js';
+import { createCancelCommand } from './bot/commands/cancel.js';
+import { createImproveCommand } from './bot/commands/improve.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
 import { RateLimiter } from './bot/middleware/rateLimiter.js';
 import { RepoFetcher } from './github/repoFetcher.js';
-import { getDatabase, closeDatabase } from './storage/database.js';
+import { getDatabase, closeDatabase, loadConfigValues } from './storage/database.js';
 import type { CommandHandler } from './bot/commands/types.js';
 
 async function main() {
@@ -26,6 +31,9 @@ async function main() {
 
   // Initialize database
   getDatabase();
+
+  // Restore persisted config values (tokens, settings set via /config or /admin)
+  config.restoreFromDb(loadConfigValues());
 
   // Initialize core services
   const keyPool = new KeyPool(config.INITIAL_API_KEYS);
@@ -37,13 +45,18 @@ async function main() {
   // Create commands
   const commands: CommandHandler[] = [
     createAskCommand(aiClient, rateLimiter),
-    createCodeCommand(sessionManager, aiClient, rateLimiter),
+    createCodeCommand(sessionManager, aiClient, rateLimiter, repoFetcher),
     createSessionCommand(sessionManager),
     createAdminCommand(keyPool, sessionManager),
     createRepoCommand(sessionManager, repoFetcher),
     createConfigCommand(),
     createModelCommand(sessionManager),
     createHelpCommand(),
+    createUsageCommand(),
+    createVersionCommand(),
+    createThinkingCommand(sessionManager),
+    createCancelCommand(sessionManager),
+    createImproveCommand(aiClient, rateLimiter),
   ];
 
   const commandMap = new Map<string, CommandHandler>();
@@ -60,7 +73,7 @@ async function main() {
   // Wire up event handlers
   handleReady(client);
   handleInteractionCreate(client, commandMap);
-  handleMessageCreate(client, sessionManager, aiClient, rateLimiter);
+  handleMessageCreate(client, sessionManager, aiClient, rateLimiter, repoFetcher);
 
   // Login
   await client.login(config.DISCORD_TOKEN);

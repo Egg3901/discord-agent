@@ -2,8 +2,8 @@ import type { Message, TextChannel, ThreadChannel } from 'discord.js';
 import { splitMessage } from '../utils/chunks.js';
 import { logger } from '../utils/logger.js';
 
-const STREAM_FLUSH_INTERVAL_MS = 1500;
-const DISCORD_RATE_LIMIT_BUFFER_MS = 1200;
+const STREAM_FLUSH_INTERVAL_MS = 4000;
+const DISCORD_RATE_LIMIT_BUFFER_MS = 1500;
 const TYPING_INTERVAL_MS = 8000;
 const PROGRESS_DOTS_INTERVAL_MS = 3000;
 
@@ -91,10 +91,14 @@ export class ResponseStreamer {
   async sendError(error: string): Promise<void> {
     this.stopTimers();
     const content = `Something went wrong: ${error}`;
-    if (this.currentMessage && this.sentMessages.length === 0) {
-      await this.currentMessage.edit(content);
-    } else {
-      await this.channel.send(content);
+    try {
+      if (this.currentMessage && this.sentMessages.length === 0) {
+        await this.currentMessage.edit(content);
+      } else {
+        await this.channel.send(content);
+      }
+    } catch (err) {
+      logger.error({ err }, 'Failed to send error message to Discord');
     }
   }
 
