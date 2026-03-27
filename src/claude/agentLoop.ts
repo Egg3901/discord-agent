@@ -92,8 +92,8 @@ export async function runAgentLoop(
       newMessages.push(assistantMsg);
     }
 
-    // If no tool calls or empty response, we're done
-    if (toolUses.length === 0 || stopReason === 'end_turn') {
+    // If no tool calls, we're done (text-only response)
+    if (toolUses.length === 0) {
       break;
     }
 
