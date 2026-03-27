@@ -169,6 +169,40 @@ export class RepoFetcher {
   }
 
   /**
+   * List repositories accessible to the authenticated user.
+   * Returns repo full names (owner/repo) for use in autocomplete.
+   * Requires GITHUB_TOKEN to be configured.
+   */
+  async listUserRepos(query?: string): Promise<{ fullName: string; description: string | null; isPrivate: boolean }[]> {
+    if (!config.GITHUB_TOKEN) return [];
+
+    try {
+      const { data } = await this.octokit.repos.listForAuthenticatedUser({
+        sort: 'updated',
+        per_page: 25,
+        type: 'all',
+      });
+
+      let repos = data.map((r) => ({
+        fullName: r.full_name,
+        description: r.description,
+        isPrivate: r.private,
+      }));
+
+      // Filter by query if provided
+      if (query) {
+        const q = query.toLowerCase();
+        repos = repos.filter((r) => r.fullName.toLowerCase().includes(q));
+      }
+
+      return repos.slice(0, 25); // Discord autocomplete limit
+    } catch (err) {
+      logger.warn({ err }, 'Failed to list user repos');
+      return [];
+    }
+  }
+
+  /**
    * Get the file tree of a repository.
    */
   async getTree(owner: string, repo: string): Promise<string[]> {
