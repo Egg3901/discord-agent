@@ -8,7 +8,10 @@ import type { CommandHandler } from './types.js';
 
 const AVAILABLE_MODELS = [
   // Claude Code (uses host's CLI login / Max plan, or pool API key)
-  { name: 'Claude Code', value: 'claude-code' },
+  { name: 'Claude Code (default)', value: 'claude-code' },
+  { name: 'Claude Code — Opus', value: 'claude-code-opus' },
+  { name: 'Claude Code — Sonnet', value: 'claude-code-sonnet' },
+  { name: 'Claude Code — Haiku', value: 'claude-code-haiku' },
   // Claude (Anthropic API)
   { name: 'Claude Opus 4.6', value: 'claude-opus-4-6' },
   { name: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6' },

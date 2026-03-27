@@ -282,7 +282,7 @@ export class AIClient {
 
   private async *streamClaudeCode(
     messages: ConversationMessage[],
-    _model: string,
+    model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
     // Extract the last user message as the prompt
@@ -328,6 +328,12 @@ export class AIClient {
         '--verbose',
         '--dangerously-skip-permissions',
       ];
+
+      // Pass model override to CLI (e.g. "claude-code-sonnet" -> "sonnet")
+      const cliModel = model.replace(/^claude-code-?/, '');
+      if (cliModel && cliModel !== 'claude-code') {
+        cliArgs.push('--model', cliModel);
+      }
 
       // Resume previous Claude Code session if available (for conversation continuity)
       const sessionKey = options.repoContext?.repoUrl || 'default';
