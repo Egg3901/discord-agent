@@ -294,6 +294,10 @@ export class AIClient {
       const acquired = await this.keyPool.acquire('anthropic', options.onQueuePosition);
       apiKey = acquired.key.apiKey;
       releaseKey = acquired.release;
+    } else {
+      yield { type: 'text', text: 'Claude Code requires an Anthropic API key. Please add one with `/admin addkey`.' } as TextChunkEvent;
+      yield { type: 'stop', stopReason: 'end_turn' } as StopEvent;
+      return;
     }
 
     try {
@@ -434,6 +438,12 @@ export class AIClient {
         return null;
 
       case 'assistant': {
+        // Detect auth errors from Claude Code
+        if (msg.error === 'authentication_failed') {
+          logger.error('Claude Code authentication failed — API key may be invalid');
+          return { type: 'text', text: 'Claude Code authentication failed. The API key may be invalid — try `/admin removekey` and `/admin addkey` with a fresh key.' } as TextChunkEvent;
+        }
+
         // Extract text from content blocks
         const content = msg.message?.content;
         if (!Array.isArray(content)) return null;
