@@ -60,6 +60,36 @@ export const AGENT_TOOLS: ToolDefinition[] = [
       required: ['query'],
     },
   },
+  {
+    name: 'search_files',
+    description:
+      'Find files in the GitHub repository by name or glob pattern. Returns matching file paths. Supports wildcards: * (any chars within a path segment), ** (any chars across segments), ? (single char). Examples: "*.ts", "src/**/*.json", "*config*". Use this instead of recursive list_directory when you know the filename pattern.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pattern: {
+          type: 'string',
+          description: 'Glob pattern to match against file paths (e.g. "*.ts", "src/**/*.json", "*config*")',
+        },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'read_files_batch',
+    description:
+      'Read multiple files from the GitHub repository in a single call. More efficient than multiple read_file calls. Returns each file\'s content separated by headers. Truncates each file at 50KB.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        paths: {
+          type: 'string',
+          description: 'Comma-separated list of file paths relative to the repo root (e.g. "src/index.ts,src/config.ts,README.md")',
+        },
+      },
+      required: ['paths'],
+    },
+  },
 ];
 
 /**

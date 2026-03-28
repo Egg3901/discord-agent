@@ -108,6 +108,26 @@ export class ToolExecutor {
           result = await this.searchCode(query);
           break;
         }
+        case 'search_files': {
+          if (!this.repoFetcher) return 'Error: No repository attached. Use /repo to attach one.';
+          const pattern = input.pattern;
+          if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > MAX_QUERY_LENGTH) {
+            return 'Error: pattern must be a non-empty string (max 200 chars)';
+          }
+          result = await this.searchFiles(pattern);
+          break;
+        }
+        case 'read_files_batch': {
+          if (!this.repoFetcher) return 'Error: No repository attached. Use /repo to attach one.';
+          const paths = input.paths;
+          if (typeof paths !== 'string' || paths.length === 0) {
+            return 'Error: paths must be a non-empty comma-separated string';
+          }
+          const pathList = paths.split(',').map((p) => p.trim()).filter(Boolean).slice(0, 10);
+          if (pathList.length === 0) return 'Error: no valid paths provided';
+          result = await this.readFilesBatch(pathList);
+          break;
+        }
         case 'run_script': {
           const language = input.language;
           const code = input.code;
@@ -196,4 +216,57 @@ export class ToolExecutor {
       .map((r: { path: string; snippet: string }, i: number) => `[${i + 1}] ${r.path}\n${r.snippet}`)
       .join('\n\n---\n\n');
   }
+
+  private async searchFiles(pattern: string): Promise<string> {
+    const allFiles = await this.repoFetcher!.getTree(this.owner, this.repo);
+    const regex = globToRegex(pattern);
+    const matches = allFiles.filter((p) => regex.test(p));
+    if (matches.length === 0) {
+      return `No files matched pattern: ${pattern}`;
+    }
+    const limited = matches.slice(0, 50);
+    const suffix = matches.length > 50 ? `\n\n[${matches.length - 50} more results not shown]` : '';
+    return `${limited.length} file(s) matching \`${pattern}\`:\n${limited.join('\n')}${suffix}`;
+  }
+
+  private async readFilesBatch(paths: string[]): Promise<string> {
+    const files = await this.repoFetcher!.fetchFiles(this.owner, this.repo, paths);
+    if (files.length === 0) {
+      return 'No files found for the given paths.';
+    }
+    return files.map((f) => {
+      const content = f.content.length > MAX_FILE_CONTENT
+        ? f.content.slice(0, MAX_FILE_CONTENT) + `\n\n[Truncated — ${Math.round(f.content.length / 1000)}KB]`
+        : f.content;
+      return `=== ${f.path} ===\n${content}`;
+    }).join('\n\n');
+  }
+}
+
+/**
+ * Convert a glob pattern to a RegExp for matching file paths.
+ * Supports: * (within segment), ** (across segments), ? (single char).
+ */
+function globToRegex(pattern: string): RegExp {
+  let r = '';
+  let i = 0;
+  while (i < pattern.length) {
+    const c = pattern[i];
+    if (c === '*' && pattern[i + 1] === '*') {
+      r += '.*';
+      i += 2;
+      if (pattern[i] === '/') i++; // skip optional trailing slash after **
+    } else if (c === '*') {
+      r += '[^/]*';
+      i++;
+    } else if (c === '?') {
+      r += '[^/]';
+      i++;
+    } else {
+      // Escape regex special chars
+      r += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      i++;
+    }
+  }
+  return new RegExp(`^${r}$`, 'i');
 }

@@ -75,6 +75,21 @@ function runMigrations(db: Database.Database): void {
   if (!cols.some((c: any) => c.name === 'cost_usd')) {
     db.exec('ALTER TABLE usage_log ADD COLUMN cost_usd REAL');
   }
+
+  // Migration: add model_override column to sessions if missing
+  const sessionCols = db.prepare("PRAGMA table_info(sessions)").all() as any[];
+  if (!sessionCols.some((c: any) => c.name === 'model_override')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN model_override TEXT');
+  }
+
+  // Migration: claude_code_sessions table for cross-restart CC session continuity
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS claude_code_sessions (
+      session_key TEXT PRIMARY KEY,
+      cc_session_id TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
 }
 
 export function logUsage(entry: {
@@ -171,6 +186,25 @@ export function loadConfigValues(): Record<string, string> {
   const result: Record<string, string> = {};
   for (const row of rows) {
     result[row.key] = row.value;
+  }
+  return result;
+}
+
+export function saveClaudeCodeSession(sessionKey: string, ccSessionId: string): void {
+  const db = getDatabase();
+  db.prepare(`
+    INSERT INTO claude_code_sessions (session_key, cc_session_id, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(session_key) DO UPDATE SET cc_session_id = excluded.cc_session_id, updated_at = excluded.updated_at
+  `).run(sessionKey, ccSessionId, Date.now());
+}
+
+export function loadClaudeCodeSessionMap(): Record<string, string> {
+  const db = getDatabase();
+  const rows = db.prepare('SELECT session_key, cc_session_id FROM claude_code_sessions').all() as { session_key: string; cc_session_id: string }[];
+  const result: Record<string, string> = {};
+  for (const row of rows) {
+    result[row.session_key] = row.cc_session_id;
   }
   return result;
 }

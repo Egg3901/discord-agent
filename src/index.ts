@@ -17,6 +17,9 @@ import { createUsageCommand } from './bot/commands/usage.js';
 import { createVersionCommand } from './bot/commands/version.js';
 import { createThinkingCommand } from './bot/commands/thinking.js';
 import { createCancelCommand } from './bot/commands/cancel.js';
+import { createSandboxCommand } from './bot/commands/sandbox.js';
+import { createExportCommand } from './bot/commands/export.js';
+import { createReviewCommand } from './bot/commands/review.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
@@ -55,6 +58,9 @@ async function main() {
     createVersionCommand(),
     createThinkingCommand(sessionManager),
     createCancelCommand(sessionManager),
+    createSandboxCommand(sessionManager),
+    createExportCommand(sessionManager),
+    createReviewCommand(aiClient, rateLimiter, repoFetcher),
   ];
 
   const commandMap = new Map<string, CommandHandler>();

@@ -19,10 +19,13 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 **Commands:**
 > \`/ask <question>\` — One-shot question (no session, quick answer)
 > \`/code <prompt> [repo]\` — Start a coding session in a new thread
+> \`/review <pr>\` — Review a GitHub PR (URL or \`owner/repo#123\`)
 > \`/repo <url> [paths]\` — Attach a GitHub repo as context to current session
 > \`/model <model> [scope]\` — Switch Claude model (this session or default)
 > \`/session end\` — End your current session
 > \`/session status\` — View your active sessions
+> \`/sandbox [path]\` — List files in the current session's sandbox workspace
+> \`/export\` — Export this session conversation as a markdown file
 > \`/usage [period] [all]\` — View your token usage and costs
 > \`/config set <key> <value>\` — Set a runtime config value
 > \`/config list\` — Show settable config keys
@@ -46,11 +49,13 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 
 **Tips:**
 • Attach code files (.ts, .py, .js, etc.) to messages — they're included as context
-• Responses stream in real-time with progress updates
+• Responses stream in real-time; tool calls show inline progress with results
+• Multi-step tasks ping you when complete so you can step away
 • If all keys are busy, you'll see your queue position
 • Sessions auto-expire after 30 minutes of inactivity
-• API keys and role settings survive bot restarts
-• Use \`/model\` to switch between Opus, Sonnet, and Haiku mid-session`;
+• API keys, role settings, and model overrides survive bot restarts
+• Use \`/model\` to switch between Opus, Sonnet, and Haiku mid-session
+• Use \`/export\` to save a session as markdown for sharing or archiving`;
 
       await interaction.reply({ content: help, ephemeral: true });
     },

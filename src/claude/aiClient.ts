@@ -7,6 +7,8 @@ import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
 import { buildSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
 import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations } from '../tools/toolDefinitions.js';
+import { getSandboxDir } from '../tools/scriptExecutor.js';
+import { saveClaudeCodeSession, loadClaudeCodeSessionMap } from '../storage/database.js';
 import type { Provider } from '../keys/types.js';
 
 // --- Content block types (provider-agnostic) ---
@@ -86,6 +88,8 @@ export interface StreamOptions {
   enableWebSearch?: boolean;
   /** Image attachments to include with the next user message */
   imageAttachments?: { mediaType: string; base64Data: string }[];
+  /** Session ID — used to isolate the Claude Code subprocess workspace and session continuity */
+  sessionId?: string;
 }
 
 /**
@@ -125,7 +129,17 @@ function getActiveTools(options: StreamOptions): import('../tools/toolDefinition
 }
 
 export class AIClient {
-  constructor(private keyPool: KeyPool) {}
+  constructor(private keyPool: KeyPool) {
+    // Restore persisted Claude Code sessions so --resume works across restarts
+    try {
+      const stored = loadClaudeCodeSessionMap();
+      for (const [key, id] of Object.entries(stored)) {
+        this.claudeCodeSessions.set(key, id);
+      }
+    } catch {
+      // Non-fatal: start fresh if DB isn't ready yet
+    }
+  }
 
   /**
    * Stream structured events (text, tool_use, thinking, stop).
@@ -382,8 +396,6 @@ export class AIClient {
     // We do NOT pass a pool API key here — that would override the CLI's
     // own auth and cause "credit balance too low" errors when pool keys
     // have limited credits.
-    let apiKey: string | undefined;
-    let releaseKey: ((success: boolean) => void) | undefined;
 
     try {
       // Build CLI args
@@ -400,8 +412,9 @@ export class AIClient {
         cliArgs.push('--model', cliModel);
       }
 
-      // Resume previous Claude Code session if available (for conversation continuity)
-      const sessionKey = options.repoContext?.repoUrl || 'default';
+      // Session key: use sessionId (Discord thread) first so each user session is isolated.
+      // Fallback chain: sessionId > repoUrl > 'default'
+      const sessionKey = options.sessionId || options.repoContext?.repoUrl || 'default';
       const existingSessionId = this.claudeCodeSessions.get(sessionKey);
       if (existingSessionId) {
         cliArgs.push('--resume', existingSessionId);
@@ -409,12 +422,11 @@ export class AIClient {
 
       cliArgs.push(prompt);
 
-      // Build env: use pool API key if available, otherwise inherit the
-      // host's Claude Code login (Max plan / OAuth) from the environment.
+      // Get or create a per-session sandbox directory so the CC subprocess has an isolated workspace.
+      const sandboxDir = await getSandboxDir(options.sessionId);
+
+      // Build env: inherit the host's Claude Code login (Max plan / OAuth).
       const env = { ...process.env };
-      if (apiKey) {
-        env.ANTHROPIC_API_KEY = apiKey;
-      }
       // Pass GITHUB_TOKEN so the CLI can authenticate git operations
       if (config.GITHUB_TOKEN) {
         env.GITHUB_TOKEN = config.GITHUB_TOKEN;
@@ -424,12 +436,10 @@ export class AIClient {
         env.HOME = config.CLAUDE_CODE_HOME;
       }
 
-      logger.debug({ provider: 'claude-code', sessionKey, resume: !!existingSessionId, hasApiKey: !!apiKey, home: env.HOME }, 'Starting Claude Code stream');
+      logger.debug({ provider: 'claude-code', sessionKey, resume: !!existingSessionId, sandboxDir, home: env.HOME }, 'Starting Claude Code stream');
 
-      yield* this.spawnClaudeCodeProcess(cliArgs, sessionKey, env, options.onUsage);
-      releaseKey?.(true);
+      yield* this.spawnClaudeCodeProcess(cliArgs, sessionKey, sandboxDir, env, options.onUsage);
     } catch (err) {
-      releaseKey?.(false);
       throw err;
     }
   }
@@ -437,25 +447,40 @@ export class AIClient {
   private async *spawnClaudeCodeProcess(
     cliArgs: string[],
     sessionKey: string,
+    sandboxDir: string,
     env: Record<string, string | undefined>,
     onUsage?: StreamOptions['onUsage'],
   ): AsyncGenerator<AIStreamEvent> {
     const proc: ChildProcess = spawn('claude', cliArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
+      cwd: sandboxDir,
     });
 
     let hasYieldedText = false;
+    let timedOut = false;
 
-    // Create async iterable from stdout
+    const timeoutMs = config.CLAUDE_CODE_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill('SIGKILL');
+      logger.warn({ sessionKey, timeoutMs }, 'Claude Code subprocess timed out');
+    }, timeoutMs);
+
     const events = this.parseClaudeCodeStream(proc, sessionKey, onUsage);
 
-    for await (const event of events) {
-      if (event.type === 'text') hasYieldedText = true;
-      yield event;
+    try {
+      for await (const event of events) {
+        if (event.type === 'text') hasYieldedText = true;
+        yield event;
+      }
+    } finally {
+      clearTimeout(timer);
     }
 
-    if (!hasYieldedText) {
+    if (timedOut) {
+      yield { type: 'text', text: `[Claude Code timed out after ${timeoutMs / 1000}s. The task may be too complex — try breaking it into smaller steps.]` } as TextChunkEvent;
+    } else if (!hasYieldedText) {
       yield { type: 'text', text: '(No response from Claude Code)' } as TextChunkEvent;
     }
     yield { type: 'stop', stopReason: 'end_turn' } as StopEvent;
@@ -544,6 +569,7 @@ export class AIClient {
       case 'system':
         if (msg.subtype === 'init' && msg.session_id) {
           this.claudeCodeSessions.set(sessionKey, msg.session_id);
+          saveClaudeCodeSession(sessionKey, msg.session_id);
           logger.debug({ sessionId: msg.session_id }, 'Claude Code session initialized');
         }
         return null;

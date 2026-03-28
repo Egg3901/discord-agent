@@ -264,4 +264,59 @@ export class RepoFetcher {
       snippet: item.text_matches?.[0]?.fragment || '(no preview)',
     }));
   }
+
+  /**
+   * Fetch a pull request's metadata and diff for code review.
+   * Returns a formatted string with PR details, description, and file diffs (truncated).
+   */
+  async fetchPR(owner: string, repo: string, prNumber: number): Promise<string> {
+    const MAX_DIFF_SIZE = 40_000; // 40KB diff limit for context window
+
+    // Fetch PR metadata
+    const { data: pr } = await this.octokit.pulls.get({ owner, repo, pull_number: prNumber });
+
+    // Fetch changed files list
+    const { data: files } = await this.octokit.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: prNumber,
+      per_page: 50,
+    });
+
+    const sections: string[] = [];
+
+    sections.push(`## PR #${prNumber}: ${pr.title}`);
+    sections.push(`**State:** ${pr.state} | **Author:** ${pr.user?.login} | **Branch:** \`${pr.head.ref}\` → \`${pr.base.ref}\``);
+    sections.push(`**URL:** ${pr.html_url}`);
+
+    if (pr.body?.trim()) {
+      sections.push(`\n### Description\n${pr.body.trim()}`);
+    }
+
+    sections.push(`\n### Changed Files (${files.length})`);
+    const fileSummary = files.map((f) =>
+      `- \`${f.filename}\` (+${f.additions} -${f.deletions}) [${f.status}]`,
+    ).join('\n');
+    sections.push(fileSummary);
+
+    // Append diffs (truncated)
+    let totalDiffSize = 0;
+    const diffSections: string[] = [];
+    for (const file of files) {
+      if (!file.patch) continue;
+      const patch = file.patch;
+      totalDiffSize += patch.length;
+      if (totalDiffSize > MAX_DIFF_SIZE) {
+        diffSections.push(`\n### ${file.filename}\n[Diff omitted — total diff too large]`);
+        break;
+      }
+      diffSections.push(`\n### ${file.filename}\n\`\`\`diff\n${patch}\n\`\`\``);
+    }
+
+    if (diffSections.length > 0) {
+      sections.push('\n### Diffs', ...diffSections);
+    }
+
+    return sections.join('\n');
+  }
 }

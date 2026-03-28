@@ -42,6 +42,9 @@ class Config {
   // Dev tools (terminal, git, build)
   ENABLE_DEV_TOOLS = process.env['ENABLE_DEV_TOOLS'] === 'true';
 
+  // Claude Code provider timeout (ms). How long to wait for the CC CLI subprocess before killing it.
+  CLAUDE_CODE_TIMEOUT_MS = parseInt(optional('CLAUDE_CODE_TIMEOUT_MS', '300000'), 10); // 5 min default
+
   // Claude Code provider: HOME directory override for finding CLI login credentials.
   // Set this to the home dir of the user who ran `claude login` (e.g. /home/myuser)
   // when the bot runs as a different user (e.g. systemd service).
@@ -80,6 +83,7 @@ class Config {
     ENABLE_SCRIPT_EXECUTION: { type: 'string', description: 'Enable sandboxed script execution tool (true/false)' },
     SCRIPT_TIMEOUT_MS: { type: 'number', description: 'Script execution timeout in milliseconds' },
     ENABLE_DEV_TOOLS: { type: 'string', description: 'Enable terminal, git, and build tools (true/false)' },
+    CLAUDE_CODE_TIMEOUT_MS: { type: 'number', description: 'Timeout in ms for Claude Code CLI subprocess (default: 300000 = 5 min)' },
     CLAUDE_CODE_HOME: { type: 'string', description: 'HOME directory for Claude Code CLI login (e.g. /home/myuser)' },
     ENABLE_WEB_SEARCH: { type: 'string', description: 'Enable web search and fetch tools (true/false)' },
     BRAVE_SEARCH_API_KEY: { type: 'string', description: 'Brave Search API key for web search tool' },

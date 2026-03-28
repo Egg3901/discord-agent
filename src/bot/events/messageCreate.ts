@@ -127,6 +127,7 @@ export function handleMessageCreate(
           signal: controller.signal,
           imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
           enableWebSearch: hasWebSearch,
+          sessionId: session.id,
           onQueuePosition: (pos: number) => {
             thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
           },
@@ -141,6 +142,8 @@ export function handleMessageCreate(
             session.repoName || '',
             session.id,
           );
+          let lastToolMsg: import('discord.js').Message | null = null;
+          const loopStart = Date.now();
           const result = await runAgentLoop(
             aiClient,
             session.messages,
@@ -155,9 +158,16 @@ export function handleMessageCreate(
                 const emoji = TOOL_EMOJIS[name] || '\u{1F527}';
                 const label = TOOL_LABELS[name] || name;
                 const detail = formatToolDetail(name, input);
-                await channel.send(`> ${emoji} ${label}${detail ? ` ${detail}` : ''}`);
+                lastToolMsg = await channel.send(`> ${emoji} ${label}${detail ? ` ${detail}` : ''}`);
               },
-              onToolEnd: async () => {},
+              onToolEnd: async (_name, toolResult) => {
+                if (!lastToolMsg) return;
+                const summary = toolResult.startsWith('Error:')
+                  ? '\u274C'
+                  : `\u2713 ${toolResult.split('\n')[0].trim().slice(0, 80)}`;
+                await lastToolMsg.edit(`${lastToolMsg.content} \u2014 ${summary}`).catch(() => {});
+                lastToolMsg = null;
+              },
               onThinking: async () => {},
             },
           );
@@ -170,10 +180,13 @@ export function handleMessageCreate(
           }
 
           if (result.toolCallCount > 0) {
+            const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
             logger.info(
               { sessionId: session.id, toolCalls: result.toolCallCount, iterations: result.iterations },
               'Agent loop completed',
             );
+            // Ping user so they know the multi-step task is done
+            await channel.send(`<@${message.author.id}> Done \u2014 ${result.toolCallCount} tool call(s) in ${elapsed}s`).catch(() => {});
           }
         } else {
           // Simple streaming mode (no repo attached)

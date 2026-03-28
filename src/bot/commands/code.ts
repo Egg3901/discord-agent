@@ -153,16 +153,19 @@ export function createCodeCommand(
 
         try {
           const hasRepo = repoOwner && repoName;
-          const hasTools = hasRepo || config.ENABLE_SCRIPT_EXECUTION;
+          const hasWebSearch = config.ENABLE_WEB_SEARCH;
+          const hasTools = hasRepo || config.ENABLE_SCRIPT_EXECUTION || config.ENABLE_DEV_TOOLS || hasWebSearch;
 
           if (hasTools) {
             // Agentic mode
+            const loopStart = Date.now();
             const toolExecutor = new ToolExecutor(
               hasRepo ? repoFetcher : null,
               repoOwner || '',
               repoName || '',
               session.id,
             );
+            let lastToolMsg: import('discord.js').Message | null = null;
             const result = await runAgentLoop(
               aiClient,
               session.messages,
@@ -171,8 +174,23 @@ export function createCodeCommand(
                 repoContext: session.repoContext,
                 modelOverride: session.modelOverride,
                 enableRepoTools: !!hasRepo,
+                enableWebSearch: hasWebSearch,
+                sessionId: session.id,
                 onQueuePosition: (pos) => {
                   thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+                },
+                onUsage: (usage) => {
+                  import('../../storage/database.js').then(({ logUsage }) => {
+                    logUsage({
+                      userId: interaction.user.id,
+                      sessionId: session.id,
+                      keyId: usage.keyId,
+                      tokensIn: usage.tokensIn,
+                      tokensOut: usage.tokensOut,
+                      model: usage.model,
+                      costUsd: usage.costUsd,
+                    });
+                  }).catch(() => {});
                 },
               },
               {
@@ -181,9 +199,16 @@ export function createCodeCommand(
                   const inputSummary = Object.entries(input)
                     .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
                     .join(', ');
-                  await thread.send(`> \u{1F527} \`${name}\` ${inputSummary}`);
+                  lastToolMsg = await thread.send(`> \u{1F527} \`${name}\` ${inputSummary}`);
                 },
-                onToolEnd: async () => {},
+                onToolEnd: async (_name, toolResult) => {
+                  if (!lastToolMsg) return;
+                  const summary = toolResult.startsWith('Error:')
+                    ? '\u274C'
+                    : `\u2713 ${toolResult.split('\n')[0].trim().slice(0, 80)}`;
+                  await lastToolMsg.edit(`${lastToolMsg.content} \u2014 ${summary}`).catch(() => {});
+                  lastToolMsg = null;
+                },
                 onThinking: async () => {},
               },
             );
@@ -193,6 +218,12 @@ export function createCodeCommand(
             for (const msg of result.newMessages) {
               sessionManager.addMessage(thread.id, msg);
             }
+
+            // Ping user on completion of multi-step tasks
+            if (result.toolCallCount > 0) {
+              const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
+              await thread.send(`<@${interaction.user.id}> Done \u2014 ${result.toolCallCount} tool call(s) in ${elapsed}s`);
+            }
           } else {
             // Simple streaming mode
             let fullResponse = '';
@@ -201,8 +232,23 @@ export function createCodeCommand(
               {
                 repoContext: session.repoContext,
                 modelOverride: session.modelOverride,
+                enableWebSearch: hasWebSearch,
+                sessionId: session.id,
                 onQueuePosition: (pos) => {
                   thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+                },
+                onUsage: (usage) => {
+                  import('../../storage/database.js').then(({ logUsage }) => {
+                    logUsage({
+                      userId: interaction.user.id,
+                      sessionId: session.id,
+                      keyId: usage.keyId,
+                      tokensIn: usage.tokensIn,
+                      tokensOut: usage.tokensOut,
+                      model: usage.model,
+                      costUsd: usage.costUsd,
+                    });
+                  }).catch(() => {});
                 },
               },
             )) {

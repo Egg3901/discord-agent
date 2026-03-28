@@ -65,28 +65,16 @@ export class SessionManager {
     // Cap messages to prevent unbounded memory growth
     if (session.messages.length > MAX_MESSAGES_PER_SESSION) {
       const first = session.messages[0];
-      const trimNotice = '[Earlier messages trimmed due to session length]';
-      // Check if a trim notice already exists (second message)
-      const hasTrimNotice =
-        session.messages.length > 1 &&
-        typeof session.messages[1].content === 'string' &&
-        session.messages[1].content === trimNotice;
-
-      if (hasTrimNotice) {
-        // Keep first message + trim notice + last N
-        session.messages = [
-          first,
-          session.messages[1],
-          ...session.messages.slice(-(MAX_MESSAGES_PER_SESSION - 2)),
-        ];
-      } else {
-        // Insert trim notice for the first time
-        session.messages = [
-          first,
-          { role: 'user', content: trimNotice },
-          ...session.messages.slice(-(MAX_MESSAGES_PER_SESSION - 2)),
-        ];
-      }
+      // Take last N messages, skipping first (which we keep separately)
+      let tail = session.messages.slice(-(MAX_MESSAGES_PER_SESSION - 2));
+      // Ensure tail starts with a user message to maintain role alternation
+      const firstUserIdx = tail.findIndex((m) => m.role === 'user');
+      if (firstUserIdx > 0) tail = tail.slice(firstUserIdx);
+      session.messages = [
+        first,
+        { role: 'assistant' as const, content: '[Note: earlier messages trimmed]' },
+        ...tail,
+      ];
     }
   }
 
@@ -173,8 +161,8 @@ export class SessionManager {
       const db = getDatabase();
       db.prepare(`
         INSERT OR REPLACE INTO sessions
-          (id, user_id, thread_id, channel_id, messages, repo_context, created_at, last_active_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          (id, user_id, thread_id, channel_id, messages, repo_context, model_override, created_at, last_active_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         session.id,
         session.userId,
@@ -182,6 +170,7 @@ export class SessionManager {
         session.channelId,
         JSON.stringify(session.messages),
         session.repoContext ? JSON.stringify(session.repoContext) : null,
+        session.modelOverride || null,
         session.createdAt,
         session.lastActiveAt,
       );
