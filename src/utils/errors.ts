@@ -76,9 +76,10 @@ export function formatApiError(err: unknown): string {
   if (err && typeof err === 'object') {
     const e = err as any;
     const message = (e.message || '').toLowerCase();
+    const rawMessage = e.message || '';
 
     // Anthropic SDK errors have status + message
-    if (e.status === 401 || message.includes('api key not valid')) {
+    if (e.status === 401 || message.includes('api key not valid') || message.includes('authentication')) {
       return 'API key authentication failed. An admin should check the configured keys with `/admin keys`.';
     }
     if (e.status === 403 || message.includes('permission denied')) {
@@ -87,6 +88,11 @@ export function formatApiError(err: unknown): string {
     if (e.status === 404 || message.includes('not found')) {
       return 'Model not found. Try switching to a different model with `/model`.';
     }
+    if (e.status === 400) {
+      // Bad request — usually a message format or context issue
+      const detail = rawMessage.slice(0, 200);
+      return `Bad request: ${detail || 'invalid message format'}`;
+    }
     if (e.status === 429 || message.includes('resource exhausted') || message.includes('rate limit')) {
       return 'API rate limit hit. Your request has been queued — please wait.';
     }
@@ -94,11 +100,21 @@ export function formatApiError(err: unknown): string {
       return 'API is temporarily overloaded. Please try again in a few seconds.';
     }
     if (e.status >= 500) {
-      return 'API server error. Please try again.';
+      return `API server error (${e.status}). Please try again.`;
     }
 
+    // Network / OS errors
     if (e.code === 'ENOTFOUND' || e.code === 'ECONNREFUSED') {
       return 'Cannot reach the API. Check the server\'s network connection.';
+    }
+    if (e.code === 'ETIMEDOUT' || e.code === 'ECONNRESET' || message.includes('timeout')) {
+      return 'Request timed out. Please try again.';
+    }
+    if (e.code === 'ENOENT' && message.includes('claude')) {
+      return 'Claude Code CLI not found. Ensure `claude` is installed and in PATH on the server.';
+    }
+    if (e.code === 'ENOENT') {
+      return `Executable not found: ${rawMessage.slice(0, 150)}`;
     }
 
     // Google SDK specific errors
@@ -108,7 +124,17 @@ export function formatApiError(err: unknown): string {
     if (message.includes('quota')) {
       return 'Google API quota exceeded. Please try again later or switch models with `/model`.';
     }
+
+    // Unknown error — surface the actual message so it's diagnosable
+    if (rawMessage) {
+      const detail = rawMessage.slice(0, 300);
+      return `Error: ${detail}`;
+    }
   }
 
-  return 'Something went wrong generating a response. Please try again.';
+  if (err instanceof Error) {
+    return `Error: ${err.message.slice(0, 300)}`;
+  }
+
+  return 'An unexpected error occurred. Please try again.';
 }
