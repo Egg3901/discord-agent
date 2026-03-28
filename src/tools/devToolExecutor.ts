@@ -82,15 +82,13 @@ export class DevToolExecutor {
     // Configure git credential helper when GITHUB_TOKEN is available
     const { env: extraEnv, cleanup } = await this.getGitCredentialEnv();
 
-    // Set git author/committer identity to avoid Vercel ignoring bot-authored commits
-    if (config.GIT_AUTHOR_NAME) {
-      extraEnv['GIT_AUTHOR_NAME'] = config.GIT_AUTHOR_NAME;
-      extraEnv['GIT_COMMITTER_NAME'] = config.GIT_AUTHOR_NAME;
-    }
-    if (config.GIT_AUTHOR_EMAIL) {
-      extraEnv['GIT_AUTHOR_EMAIL'] = config.GIT_AUTHOR_EMAIL;
-      extraEnv['GIT_COMMITTER_EMAIL'] = config.GIT_AUTHOR_EMAIL;
-    }
+    // Set git author/committer identity to avoid Vercel ignoring bot-authored commits.
+    // Uses explicit config if set, otherwise derives a friendly name from the active model.
+    const { name: gitName, email: gitEmail } = this.getGitIdentity();
+    extraEnv['GIT_AUTHOR_NAME'] = gitName;
+    extraEnv['GIT_COMMITTER_NAME'] = gitName;
+    extraEnv['GIT_AUTHOR_EMAIL'] = gitEmail;
+    extraEnv['GIT_COMMITTER_EMAIL'] = gitEmail;
 
     try {
       // Split args for spawn — use shell to handle quoting
@@ -98,6 +96,35 @@ export class DevToolExecutor {
     } finally {
       await cleanup();
     }
+  }
+
+  /**
+   * Determine git author name/email for commits.
+   * Priority: explicit config > auto-derived from active model.
+   */
+  private getGitIdentity(): { name: string; email: string } {
+    if (config.GIT_AUTHOR_NAME && config.GIT_AUTHOR_EMAIL) {
+      return { name: config.GIT_AUTHOR_NAME, email: config.GIT_AUTHOR_EMAIL };
+    }
+
+    const model = config.ANTHROPIC_MODEL;
+
+    let name: string;
+    if (model === 'claude-code' || model.startsWith('claude-code-') || model.startsWith('claude-')) {
+      name = 'Claude';
+    } else if (model.startsWith('ollama/')) {
+      // e.g. "ollama/llama3:8b" -> "Ollama (llama3:8b)"
+      name = `Ollama (${model.replace(/^ollama\//, '')})`;
+    } else if (model.startsWith('gemini-')) {
+      name = 'Gemini';
+    } else {
+      name = 'AI Assistant';
+    }
+
+    return {
+      name: config.GIT_AUTHOR_NAME || name,
+      email: config.GIT_AUTHOR_EMAIL || 'noreply@users.noreply.github.com',
+    };
   }
 
   private async buildProject(input: Record<string, unknown>): Promise<string> {
