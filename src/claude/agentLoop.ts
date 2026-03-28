@@ -8,6 +8,8 @@ export interface AgentLoopCallbacks {
   onToolStart: (toolName: string, input: Record<string, unknown>) => Promise<void>;
   onToolEnd: (toolName: string, result: string) => Promise<void>;
   onThinking: () => Promise<void>;
+  /** Called after each iteration with running totals (for progress display). */
+  onProgress?: (iteration: number, toolCallCount: number, elapsedMs: number) => Promise<void>;
 }
 
 export interface AgentLoopResult {
@@ -32,6 +34,7 @@ export async function runAgentLoop(
   const newMessages: ConversationMessage[] = [];
   let totalText = '';
   let toolCallCount = 0;
+  const loopStart = Date.now();
 
   // Work on a copy so we don't mutate the caller's array during the loop
   const workingMessages = [...messages];
@@ -105,21 +108,38 @@ export async function runAgentLoop(
     }
     previousToolKey = currentToolKey;
 
-    // Execute tools and build tool_result blocks
+    // Execute tools and build tool_result blocks.
+    // Run multiple tool calls in parallel for read-heavy operations (significant
+    // speedup when the AI requests e.g. read_file + search_code simultaneously).
     const toolResultBlocks: ContentBlock[] = [];
-    for (const tu of toolUses) {
+    if (toolUses.length === 1) {
+      // Single tool — execute directly (no parallelism overhead)
+      const tu = toolUses[0];
       toolCallCount++;
       await callbacks.onToolStart(tu.name, tu.input);
-
       const result = await toolExecutor.execute(tu.name, tu.input);
-
       await callbacks.onToolEnd(tu.name, result);
+      toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: result });
+    } else {
+      // Multiple tools — fire start callbacks, execute in parallel, then end callbacks
+      for (const tu of toolUses) {
+        toolCallCount++;
+        await callbacks.onToolStart(tu.name, tu.input);
+      }
 
-      toolResultBlocks.push({
-        type: 'tool_result',
-        tool_use_id: tu.id,
-        content: result,
-      });
+      const results = await Promise.allSettled(
+        toolUses.map((tu) => toolExecutor.execute(tu.name, tu.input)),
+      );
+
+      for (let i = 0; i < toolUses.length; i++) {
+        const tu = toolUses[i];
+        const settled = results[i];
+        const result = settled.status === 'fulfilled'
+          ? settled.value
+          : `Error: ${settled.reason instanceof Error ? settled.reason.message : String(settled.reason)}`;
+        await callbacks.onToolEnd(tu.name, result);
+        toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: result });
+      }
     }
 
     const toolResultMsg: ConversationMessage = {
@@ -133,6 +153,9 @@ export async function runAgentLoop(
       { iteration, toolCalls: toolUses.map((t) => t.name), toolCallCount },
       'Agent loop iteration complete',
     );
+
+    // Notify caller of progress so they can update the Discord message
+    await callbacks.onProgress?.(iteration + 1, toolCallCount, Date.now() - loopStart);
 
     // Safety: if we're about to hit the max, ask the AI to wrap up
     if (iteration === maxIterations - 2) {
