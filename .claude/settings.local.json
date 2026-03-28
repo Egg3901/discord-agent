@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(./node_modules/.bin/tsc --noEmit)",
-      "Bash(node_modules/.bin/tsc.cmd --noEmit)"
+      "Bash(node_modules/.bin/tsc.cmd --noEmit)",
+      "Bash(where claude:*)",
+      "Bash(claude -p --output-format stream-json)",
+      "Read(//c/Users/rainf/.local/bin/**)",
+      "Read(//c/Users/rainf/Desktop/discord-agent/$HOME/.local/bin/**)"
     ]
   }
 }
