@@ -8,9 +8,24 @@ import { config } from '../../config.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { formatApiError } from '../../utils/errors.js';
-import { listOllamaModels, formatModelSize } from '../../claude/ollamaModels.js';
+import { listOllamaModels, formatModelSize, isRemoteOllama } from '../../claude/ollamaModels.js';
 import { logger } from '../../utils/logger.js';
 import type { CommandHandler } from './types.js';
+
+/**
+ * Well-known models available on Ollama's cloud (ollama.com).
+ * Shown in autocomplete when OLLAMA_BASE_URL points to a remote host.
+ */
+const OLLAMA_CLOUD_MODELS = [
+  { name: 'Ollama Cloud: DeepSeek V3.1 671B', value: 'ollama/deepseek-v3.1--671b' },
+  { name: 'Ollama Cloud: Qwen3 Coder 480B', value: 'ollama/qwen3-coder--480b' },
+  { name: 'Ollama Cloud: GPT-OSS 120B', value: 'ollama/gpt-oss--120b' },
+  { name: 'Ollama Cloud: GPT-OSS 20B', value: 'ollama/gpt-oss--20b' },
+  { name: 'Ollama Cloud: Llama 3.3 70B', value: 'ollama/llama3.3--70b' },
+  { name: 'Ollama Cloud: Qwen3 32B', value: 'ollama/qwen3--32b' },
+  { name: 'Ollama Cloud: Mistral Small 3.2', value: 'ollama/mistral-small3.2' },
+  { name: 'Ollama Cloud: Gemma3 27B', value: 'ollama/gemma3--27b' },
+];
 
 /**
  * Static models from cloud providers (always available).
@@ -86,6 +101,18 @@ export function createModelCommand(
           const value = encodeOllamaModelValue(m.name);
           if (!focused || displayName.toLowerCase().includes(focused) || m.name.toLowerCase().includes(focused)) {
             choices.push({ name: displayName.slice(0, 100), value });
+          }
+        }
+
+        // When pointing at Ollama cloud, also show well-known cloud models.
+        // These appear even if /api/tags returns an empty list.
+        if (isRemoteOllama()) {
+          for (const m of OLLAMA_CLOUD_MODELS) {
+            if (!focused || m.name.toLowerCase().includes(focused) || m.value.toLowerCase().includes(focused)) {
+              if (!choices.some((c) => c.value === m.value)) {
+                choices.push(m);
+              }
+            }
           }
         }
 
