@@ -81,7 +81,33 @@ export async function webFetch(url: string): Promise<string> {
     }
 
     const contentType = resp.headers.get('content-type') || '';
-    const raw = await resp.text();
+
+    // Reject obviously huge responses early via Content-Length header
+    const contentLength = parseInt(resp.headers.get('content-length') || '0', 10);
+    if (contentLength > MAX_FETCH_SIZE * 10) {
+      return `Error: Response too large (${Math.round(contentLength / 1_000_000)}MB). Max supported: ${MAX_FETCH_SIZE / 1000}KB.`;
+    }
+
+    // Stream the body with a size cap to avoid OOM on huge responses
+    const reader = resp.body?.getReader();
+    if (!reader) {
+      return '(empty page)';
+    }
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    const maxDownloadBytes = MAX_FETCH_SIZE * 2; // download up to 2x limit (HTML → text shrinks)
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        chunks.push(value);
+        if (totalBytes >= maxDownloadBytes) break;
+      }
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+    const raw = new TextDecoder().decode(Buffer.concat(chunks));
 
     let text: string;
     if (contentType.includes('json')) {

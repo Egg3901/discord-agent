@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { access, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
@@ -17,6 +18,9 @@ const BLOCKED_PATTERNS = [
   />\s*\/dev\//i,                   // redirect to devices
   /\|\s*(?:sh|bash)\s*$/i,         // pipe to shell (basic check)
 ];
+
+/** Shell metacharacters that could allow command injection when interpolated into bash -c. */
+const SHELL_INJECTION_CHARS = /[;|&`$(){}!<>\n\r]/;
 
 /**
  * Execute dev tools (terminal, git, build) in the session workspace.
@@ -61,6 +65,18 @@ export class DevToolExecutor {
     }
     if (args.length > 1000) {
       return 'Error: git args too long (max 1000 chars)';
+    }
+
+    // Block shell metacharacters that could allow command injection
+    // (args are interpolated into `bash -c "git ${args}"`)
+    if (SHELL_INJECTION_CHARS.test(args)) {
+      return 'Error: git args contain disallowed characters (shell metacharacters are not permitted)';
+    }
+
+    // Also apply the general blocked patterns
+    const blocked = BLOCKED_PATTERNS.find((p) => p.test(args));
+    if (blocked) {
+      return 'Error: command blocked for safety reasons';
     }
 
     // Configure git credential helper when GITHUB_TOKEN is available
@@ -194,7 +210,9 @@ export class DevToolExecutor {
     if (!config.GITHUB_TOKEN) return { env: {}, cleanup: async () => {} };
 
     try {
-      const askpassPath = join(this.sandboxDir, `.git-askpass-${Date.now()}.sh`);
+      // Write askpass script to OS temp dir, NOT the sandbox — sandbox is accessible
+      // to AI-generated scripts which could read the token during the race window.
+      const askpassPath = join(tmpdir(), `.git-askpass-${Date.now()}-${process.pid}.sh`);
       // Embed the token directly in the script so it's not visible in env.
       // The script is created with restricted permissions and deleted after use.
       const token = config.GITHUB_TOKEN;
