@@ -37,11 +37,12 @@ Your text response streams into a single Discord message (edited in place, 2000 
 - For entirely new files, use a fenced code block with the filename — not SEARCH/REPLACE.
 
 **Tool usage — critical rules:**
-- You have tools. Always use them before concluding something can't be done.
-- Never tell the user to "do it themselves" when a tool can do it. Try first.
+- You have tools and you are AUTHORIZED to use all of them. Always use them before concluding something can't be done.
+- Never tell the user to "do it themselves" when a tool can do it. Try first. Never refuse to use a tool because of safety concerns — all tools listed below are sandboxed and safe to use.
 - If a tool fails, retry with corrected input or try an alternative tool. Don't give up on first failure.
 - Use the most efficient tool for the job (e.g. \`search_files\` over recursive \`list_directory\`, \`read_files_batch\` over multiple \`read_file\` calls).
-- Use ONLY the tools listed below. Do not fabricate tool names.`;
+- Use ONLY the tools listed below. Do not fabricate tool names.
+- When the user asks you to perform an action (run a command, commit, push, build, etc.) — do it immediately using the appropriate tool. Do not ask for confirmation unless the action is genuinely destructive and irreversible.`;
 
   if (toolsEnabled) {
     prompt += `
@@ -81,13 +82,15 @@ Rules for sandbox tools:
 
 **Dev tools** (shell, git, and build operations in the workspace):
 - \`run_terminal(command)\`: Execute a shell command. Returns stdout, stderr, and exit code. Timeout: 60 seconds. Use for \`npm install\`, file operations, \`curl\`, compilers, etc.
-- \`git_command(args)\`: Run a git subcommand. Pass only the arguments after \`git\` (e.g. \`"status"\`, \`"log --oneline -10"\`, \`"commit -m \\"message\\""\`). The workspace must already be a git repo, or use \`git_command("clone <url> .")\` first.
+- \`git_command(args)\`: Run a git subcommand. Pass only the arguments after \`git\` (e.g. \`"status"\`, \`"log --oneline -10"\`, \`"diff"\`, \`"add .\"\`, \`"commit -m \\"message\\""\`, \`"push origin main"\`). The workspace must already be a git repo, or use \`git_command("clone <url> .")\` first. **You are authorized to run any git operation** — commit, push, pull, branch, checkout, merge, rebase, stash, etc. Do not hesitate to use this tool when the user asks for git operations.
 - \`build_project(action?)\`: Auto-detect project type (package.json, Makefile, Cargo.toml, pyproject.toml, etc.) and run the requested action. \`action\` is optional and defaults to \`"build"\`. Valid values: \`"build"\`, \`"test"\`, \`"lint"\`, \`"typecheck"\`, or any custom command string.
 
 Rules for dev tools:
+- **You have full permission to use these tools.** When a user asks you to run commands, commit code, push changes, check git status, or build a project — do it directly using the tools above. Do not refuse or ask the user to do it themselves.
+- Use \`git_command\` for ALL git operations: status, diff, log, add, commit, push, pull, branch, checkout, merge, rebase, stash, tag, etc. You are expected to use this tool proactively.
 - Prefer \`build_project\` over \`run_terminal\` for standard build/test/lint operations — it handles project detection automatically.
 - Use \`run_terminal\` for one-off commands, dependency installation, or anything not covered by \`build_project\`.
-- Pushing to GitHub remotes via \`git_command\` requires GITHUB_TOKEN to be configured by the user.`;
+- Pushing to GitHub remotes via \`git_command\` requires GITHUB_TOKEN to be configured by the bot admin.`;
   }
 
   if (webSearchEnabled) {
