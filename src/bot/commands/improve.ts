@@ -4,23 +4,36 @@ import {
   type GuildMember,
 } from 'discord.js';
 import type { AIClient } from '../../claude/aiClient.js';
+import { getProviderForModel } from '../../claude/aiClient.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { logger } from '../../utils/logger.js';
+import { config } from '../../config.js';
 import type { CommandHandler } from './types.js';
 
 /**
  * Generate an improved version of a coding prompt.
- * Returns the original prompt unchanged if improvement fails or is identical.
+ * Returns the original prompt unchanged if improvement fails, is identical,
+ * or if the effective model is Claude Code (spawning a subprocess for this is wasteful).
  */
-export async function generateImprovedPrompt(aiClient: AIClient, prompt: string): Promise<string> {
+export async function generateImprovedPrompt(aiClient: AIClient, prompt: string, modelOverride?: string): Promise<string> {
+  const effectiveModel = modelOverride || config.ANTHROPIC_MODEL;
+  const provider = getProviderForModel(effectiveModel);
+
+  // Skip improvement for CC provider — spawning a subprocess just to rewrite a prompt
+  // is heavy, slow, and would bypass pool key auth. Also avoids hitting Anthropic API
+  // when no credits are available.
+  if (provider === 'claude-code') {
+    return prompt;
+  }
+
   try {
     const result = await aiClient.getResponse(
       [{
         role: 'user',
         content: `Improve this coding request to be more specific, technical, and actionable. Preserve the original intent exactly. Return ONLY the improved prompt text — no explanation, no preamble, no quotes:\n\n${prompt}`,
       }],
-      {},
+      { modelOverride: effectiveModel },
     );
     const improved = result.trim();
     return improved || prompt;

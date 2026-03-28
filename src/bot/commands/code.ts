@@ -199,6 +199,14 @@ export function createCodeCommand(
         const thinkingMsg = await thread.send('Thinking...');
         const streamer = new ResponseStreamer(thread, thinkingMsg);
 
+        // Periodically update the thinking message with elapsed time so users
+        // know the bot is alive during long CC or complex requests.
+        const thinkingStart = Date.now();
+        const thinkingTimer = setInterval(() => {
+          const secs = Math.round((Date.now() - thinkingStart) / 1000);
+          thinkingMsg.edit(`Thinking... (${secs}s)`).catch(() => {});
+        }, 15_000);
+
         try {
           const hasRepo = repoOwner && repoName;
           const hasWebSearch = config.ENABLE_WEB_SEARCH;
@@ -261,6 +269,7 @@ export function createCodeCommand(
               },
             );
 
+            clearInterval(thinkingTimer);
             await streamer.finish();
 
             for (const msg of result.newMessages) {
@@ -273,6 +282,7 @@ export function createCodeCommand(
               await thread.send(`<@${interaction.user.id}> Done \u2014 ${result.toolCallCount} tool call(s) in ${elapsed}s`);
             }
           } else {
+            clearInterval(thinkingTimer);
             // Simple streaming mode
             let fullResponse = '';
             for await (const chunk of aiClient.streamText(
@@ -311,6 +321,7 @@ export function createCodeCommand(
             });
           }
         } catch (err) {
+          clearInterval(thinkingTimer);
           logger.error({ err }, 'Error streaming in /code');
           await streamer.sendError(formatApiError(err));
         }

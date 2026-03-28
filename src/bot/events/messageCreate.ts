@@ -101,10 +101,17 @@ export function handleMessageCreate(
       const thinkingMsg = await channel.send('Thinking...');
       const streamer = new ResponseStreamer(channel, thinkingMsg);
 
+      // Periodic elapsed-time update so users know the bot is alive during long tasks.
+      const thinkingStart = Date.now();
+      const thinkingTimer = setInterval(() => {
+        const secs = Math.round((Date.now() - thinkingStart) / 1000);
+        thinkingMsg.edit(`Thinking... (${secs}s)`).catch(() => {});
+      }, 15_000);
+
       try {
         const hasRepo = session.repoOwner && session.repoName;
         const hasWebSearch = config.ENABLE_WEB_SEARCH;
-        const hasTools = hasRepo || config.ENABLE_SCRIPT_EXECUTION || hasWebSearch;
+        const hasTools = hasRepo || config.ENABLE_SCRIPT_EXECUTION || config.ENABLE_DEV_TOOLS || hasWebSearch;
 
         const onUsage = (usage: import('../../claude/aiClient.js').UsageInfo) => {
           logUsage({
@@ -172,6 +179,7 @@ export function handleMessageCreate(
             },
           );
 
+          clearInterval(thinkingTimer);
           await streamer.finish();
 
           // Persist all new messages from the agent loop
@@ -197,6 +205,7 @@ export function handleMessageCreate(
             await streamer.push(chunk);
           }
 
+          clearInterval(thinkingTimer);
           await streamer.finish();
 
           sessionManager.addMessage(threadId, {
@@ -205,6 +214,7 @@ export function handleMessageCreate(
           });
         }
       } catch (err: any) {
+        clearInterval(thinkingTimer);
         if (err?.name === 'AbortError') {
           await streamer.finish();
           await channel.send('*Cancelled.*');
@@ -213,6 +223,7 @@ export function handleMessageCreate(
           await streamer.sendError(formatApiError(err));
         }
       } finally {
+        clearInterval(thinkingTimer);
         session.activeController = undefined;
       }
     } catch (err) {
