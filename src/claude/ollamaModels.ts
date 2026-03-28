@@ -5,6 +5,27 @@
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
+/**
+ * Build auth headers for Ollama requests.
+ * Cloud-hosted endpoints require a Bearer token; local servers need none.
+ */
+function ollamaHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.OLLAMA_API_KEY) {
+    headers['Authorization'] = `Bearer ${config.OLLAMA_API_KEY}`;
+  }
+  return headers;
+}
+
+/**
+ * Returns true when the configured Ollama URL points to a remote (cloud) host.
+ * Remote endpoints have models pre-loaded — auto-pull is not applicable.
+ */
+export function isRemoteOllama(): boolean {
+  const url = config.OLLAMA_BASE_URL;
+  return !url.includes('localhost') && !url.includes('127.0.0.1') && !url.includes('::1');
+}
+
 export interface OllamaModel {
   name: string;
   size: number;
@@ -26,6 +47,7 @@ export async function listOllamaModels(): Promise<OllamaModel[]> {
   const baseUrl = config.OLLAMA_BASE_URL;
   try {
     const resp = await fetch(`${baseUrl}/api/tags`, {
+      headers: ollamaHeaders(),
       signal: AbortSignal.timeout(5_000),
     });
     if (!resp.ok) return modelCache || [];
@@ -63,6 +85,7 @@ export async function isModelAvailable(modelName: string): Promise<boolean> {
 export async function isOllamaReachable(): Promise<boolean> {
   try {
     const resp = await fetch(`${config.OLLAMA_BASE_URL}/api/tags`, {
+      headers: ollamaHeaders(),
       signal: AbortSignal.timeout(3_000),
     });
     return resp.ok;
@@ -120,7 +143,7 @@ async function* pullOllamaModel(modelName: string): AsyncGenerator<PullProgress>
 
   const resp = await fetch(`${baseUrl}/api/pull`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: ollamaHeaders(),
     body: JSON.stringify({ model: modelName, stream: true }),
   });
 

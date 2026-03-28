@@ -13,7 +13,7 @@ import { buildSystemPrompt, trimConversation, type RepoContext } from './context
 import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations, toOpenAITools } from '../tools/toolDefinitions.js';
 import { getSandboxDir } from '../tools/scriptExecutor.js';
 import { saveClaudeCodeSession, loadClaudeCodeSessionMap } from '../storage/database.js';
-import { isModelAvailable, isOllamaReachable, ensureModelPulled } from './ollamaModels.js';
+import { isModelAvailable, isOllamaReachable, ensureModelPulled, isRemoteOllama } from './ollamaModels.js';
 import type { Provider } from '../keys/types.js';
 
 // --- Content block types (provider-agnostic) ---
@@ -826,16 +826,19 @@ export class AIClient {
     // Check connectivity first
     if (!await isOllamaReachable()) {
       const err = new Error(
-        `Cannot connect to Ollama at ${baseUrl}. Ensure Ollama is running (\`ollama serve\`) ` +
-        `or change the URL with \`/config set OLLAMA_BASE_URL <url>\`.`,
+        `Cannot connect to Ollama at ${baseUrl}. ` +
+        (isRemoteOllama()
+          ? `Check that OLLAMA_BASE_URL is correct and OLLAMA_API_KEY is set (get one at ollama.com/settings/api).`
+          : `Ensure Ollama is running (\`ollama serve\`) or change the URL with \`/config set OLLAMA_BASE_URL <url>\`.`),
       );
       (err as any).status = 503;
       (err as any).userMessage = err.message;
       throw err;
     }
 
-    // Auto-pull model if not available locally (deduplicates concurrent pulls)
-    if (!await isModelAvailable(ollamaModel)) {
+    // Auto-pull model if not available — only applicable for local Ollama servers.
+    // Remote/cloud endpoints have models pre-loaded; pulling is not supported.
+    if (!isRemoteOllama() && !await isModelAvailable(ollamaModel)) {
       options.onStatus?.(`Downloading **${ollamaModel}**... this may take a few minutes.`);
       logger.info({ model: ollamaModel }, 'Ollama model not found locally, pulling');
 
@@ -927,9 +930,13 @@ export class AIClient {
     }
 
     try {
+      const ollamaReqHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (config.OLLAMA_API_KEY) {
+        ollamaReqHeaders['Authorization'] = `Bearer ${config.OLLAMA_API_KEY}`;
+      }
       const response = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: ollamaReqHeaders,
         body: JSON.stringify(body),
         signal: options.signal,
       });
