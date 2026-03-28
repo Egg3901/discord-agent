@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
+  type GuildMember,
 } from 'discord.js';
+import { isAllowed } from '../middleware/permissions.js';
+import { formatApiError } from '../../utils/errors.js';
 import type { CommandHandler } from './types.js';
 
 const startTime = Date.now();
@@ -56,19 +59,36 @@ export function createVersionCommand(): CommandHandler {
       .setDescription('Show bot version, uptime, and recent commit info'),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      const version = getPackageVersion();
-      const uptime = formatUptime(Date.now() - startTime);
-      const commit = getGitCommit();
-
-      let text = `**Discord Agent v${version}**\n`;
-      text += `**Uptime:** ${uptime}\n`;
-
-      if (commit) {
-        text += `**Latest Commit:** \`${commit.hash}\` — ${commit.message}\n`;
-        text += `**Commit Date:** ${commit.date}`;
+      if (!isAllowed(interaction.member as GuildMember | null)) {
+        await interaction.reply({
+          content: 'You do not have a role that allows using this bot.',
+          ephemeral: true,
+        });
+        return;
       }
 
-      await interaction.reply({ content: text, ephemeral: true });
+      try {
+        const version = getPackageVersion();
+        const uptime = formatUptime(Date.now() - startTime);
+        const commit = getGitCommit();
+
+        let text = `**Discord Agent v${version}**\n`;
+        text += `**Uptime:** ${uptime}\n`;
+
+        if (commit) {
+          text += `**Latest Commit:** \`${commit.hash}\` — ${commit.message}\n`;
+          text += `**Commit Date:** ${commit.date}`;
+        }
+
+        await interaction.reply({ content: text, ephemeral: true });
+      } catch (err) {
+        const msg = formatApiError(err);
+        if (interaction.deferred) {
+          await interaction.editReply(msg).catch(() => {});
+        } else {
+          await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+        }
+      }
     },
   };
 }

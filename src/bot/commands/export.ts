@@ -2,8 +2,11 @@ import {
   SlashCommandBuilder,
   AttachmentBuilder,
   type ChatInputCommandInteraction,
+  type GuildMember,
 } from 'discord.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
+import { isAllowed } from '../middleware/permissions.js';
+import { formatApiError } from '../../utils/errors.js';
 import type { CommandHandler } from './types.js';
 import type { ConversationMessage, ContentBlock } from '../../claude/aiClient.js';
 
@@ -41,6 +44,14 @@ export function createExportCommand(sessionManager: SessionManager): CommandHand
       .setDescription('Export this session conversation as a markdown file'),
 
     async execute(interaction: ChatInputCommandInteraction) {
+      if (!isAllowed(interaction.member as GuildMember | null)) {
+        await interaction.reply({
+          content: 'You do not have a role that allows using this bot.',
+          ephemeral: true,
+        });
+        return;
+      }
+
       const threadId = interaction.channelId;
       const session = sessionManager.getByThread(threadId);
 
@@ -62,33 +73,42 @@ export function createExportCommand(sessionManager: SessionManager): CommandHand
 
       await interaction.deferReply({ ephemeral: true });
 
-      const header = [
-        `# Session Export`,
-        ``,
-        `- **Session ID:** ${session.id}`,
-        `- **Thread:** <#${session.threadId}>`,
-        `- **Started:** ${new Date(session.createdAt).toISOString()}`,
-        `- **Messages:** ${session.messages.length}`,
-        session.repoContext ? `- **Repo:** ${session.repoContext.repoUrl}` : null,
-        session.modelOverride ? `- **Model:** ${session.modelOverride}` : null,
-        ``,
-        `---`,
-        ``,
-      ].filter(Boolean).join('\n');
+      try {
+        const header = [
+          `# Session Export`,
+          ``,
+          `- **Session ID:** ${session.id}`,
+          `- **Thread:** <#${session.threadId}>`,
+          `- **Started:** ${new Date(session.createdAt).toISOString()}`,
+          `- **Messages:** ${session.messages.length}`,
+          session.repoContext ? `- **Repo:** ${session.repoContext.repoUrl}` : null,
+          session.modelOverride ? `- **Model:** ${session.modelOverride}` : null,
+          ``,
+          `---`,
+          ``,
+        ].filter(Boolean).join('\n');
 
-      const body = session.messages
-        .map((msg, i) => messageToMarkdown(msg, i))
-        .join('\n\n---\n\n');
+        const body = session.messages
+          .map((msg, i) => messageToMarkdown(msg, i))
+          .join('\n\n---\n\n');
 
-      const markdown = header + body;
-      const buffer = Buffer.from(markdown, 'utf-8');
-      const filename = `session-${session.id}-${Date.now()}.md`;
-      const attachment = new AttachmentBuilder(buffer, { name: filename });
+        const markdown = header + body;
+        const buffer = Buffer.from(markdown, 'utf-8');
+        const filename = `session-${session.id}-${Date.now()}.md`;
+        const attachment = new AttachmentBuilder(buffer, { name: filename });
 
-      await interaction.editReply({
-        content: `Session exported (${session.messages.length} messages).`,
-        files: [attachment],
-      });
+        await interaction.editReply({
+          content: `Session exported (${session.messages.length} messages).`,
+          files: [attachment],
+        });
+      } catch (err) {
+        const msg = formatApiError(err);
+        if (interaction.deferred) {
+          await interaction.editReply(msg).catch(() => {});
+        } else {
+          await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+        }
+      }
     },
   };
 }

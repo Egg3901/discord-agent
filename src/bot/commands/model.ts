@@ -1,9 +1,12 @@
 import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
+  type GuildMember,
 } from 'discord.js';
 import { config } from '../../config.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
+import { isAllowed } from '../middleware/permissions.js';
+import { formatApiError } from '../../utils/errors.js';
 import type { CommandHandler } from './types.js';
 
 const AVAILABLE_MODELS = [
@@ -49,36 +52,53 @@ export function createModelCommand(
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      const model = interaction.options.getString('model', true);
-      const scope = interaction.options.getString('scope') || 'session';
-      const modelLabel = AVAILABLE_MODELS.find((m) => m.value === model)?.name ?? model;
-      const provider = model === 'claude-code' || model.startsWith('claude-code-')
-        ? 'Claude Code'
-        : model.startsWith('gemini-') ? 'Google' : 'Anthropic';
-
-      if (scope === 'default') {
-        config.ANTHROPIC_MODEL = model;
+      if (!isAllowed(interaction.member as GuildMember | null)) {
         await interaction.reply({
-          content: `Default model changed to **${modelLabel}** (${provider}). All new sessions will use this model.`,
+          content: 'You do not have a role that allows using this bot.',
           ephemeral: true,
         });
         return;
       }
 
-      const session = sessionManager.getByThread(interaction.channelId);
-      if (!session) {
+      try {
+        const model = interaction.options.getString('model', true);
+        const scope = interaction.options.getString('scope') || 'session';
+        const modelLabel = AVAILABLE_MODELS.find((m) => m.value === model)?.name ?? model;
+        const provider = model === 'claude-code' || model.startsWith('claude-code-')
+          ? 'Claude Code'
+          : model.startsWith('gemini-') ? 'Google' : 'Anthropic';
+
+        if (scope === 'default') {
+          config.ANTHROPIC_MODEL = model;
+          await interaction.reply({
+            content: `Default model changed to **${modelLabel}** (${provider}). All new sessions will use this model.`,
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const session = sessionManager.getByThread(interaction.channelId);
+        if (!session) {
+          await interaction.reply({
+            content: 'No active session in this thread. Use `/code` to start one, or use `/model <model> scope:default` to change the global default.',
+            ephemeral: true,
+          });
+          return;
+        }
+
+        session.modelOverride = model;
         await interaction.reply({
-          content: 'No active session in this thread. Use `/code` to start one, or use `/model <model> scope:default` to change the global default.',
+          content: `This session is now using **${modelLabel}** (${provider}). Other sessions are unaffected.`,
           ephemeral: true,
         });
-        return;
+      } catch (err) {
+        const msg = formatApiError(err);
+        if (interaction.deferred) {
+          await interaction.editReply(msg).catch(() => {});
+        } else {
+          await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+        }
       }
-
-      session.modelOverride = model;
-      await interaction.reply({
-        content: `This session is now using **${modelLabel}** (${provider}). Other sessions are unaffected.`,
-        ephemeral: true,
-      });
     },
   };
 }

@@ -185,10 +185,14 @@ export function trimConversation(
     while (tail.length > 0 && tail[0].role !== 'user') {
       tail.shift();
     }
-    result.push({
-      role: 'assistant' as const,
-      content: '[Note: earlier messages trimmed to fit context window]',
-    });
+    // Only add the bridge if tail has content — otherwise we'd create
+    // [first_msg, assistant_bridge] with no following user message.
+    if (tail.length > 0) {
+      result.push({
+        role: 'assistant' as const,
+        content: '[Note: earlier messages trimmed to fit context window]',
+      });
+    }
   }
 
   result.push(...tail);

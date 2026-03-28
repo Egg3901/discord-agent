@@ -1,9 +1,12 @@
 import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
+  type GuildMember,
 } from 'discord.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { sandboxListFiles, getSandboxDir } from '../../tools/scriptExecutor.js';
+import { isAllowed } from '../middleware/permissions.js';
+import { formatApiError } from '../../utils/errors.js';
 import type { CommandHandler } from './types.js';
 
 export function createSandboxCommand(sessionManager: SessionManager): CommandHandler {
@@ -19,6 +22,14 @@ export function createSandboxCommand(sessionManager: SessionManager): CommandHan
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
+      if (!isAllowed(interaction.member as GuildMember | null)) {
+        await interaction.reply({
+          content: 'You do not have a role that allows using this bot.',
+          ephemeral: true,
+        });
+        return;
+      }
+
       const threadId = interaction.channelId;
       const session = sessionManager.getByThread(threadId);
 
@@ -42,8 +53,12 @@ export function createSandboxCommand(sessionManager: SessionManager): CommandHan
           `**Sandbox workspace** \`${displayPath}\`:\n\`\`\`\n${listing}\n\`\`\`\n*Sandbox dir: \`${sandboxDir}\`*`,
         );
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await interaction.editReply(`Error reading sandbox: ${msg}`);
+        const msg = formatApiError(err);
+        if (interaction.deferred) {
+          await interaction.editReply(msg).catch(() => {});
+        } else {
+          await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+        }
       }
     },
   };

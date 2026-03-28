@@ -193,7 +193,9 @@ export class AIClient {
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
     const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch);
-    const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
+    // Reserve token budget for the system prompt so conversation trimming is accurate
+    const systemTokenEstimate = Math.ceil(systemPrompt.length / 4);
+    const trimmed = trimConversation(messages, Math.max(config.MAX_CONTEXT_TOKENS - systemTokenEstimate, 4096));
 
     // Convert messages to Anthropic format
     const anthropicMessages = trimmed.map((m) => ({
@@ -476,6 +478,11 @@ export class AIClient {
       }
     } finally {
       clearTimeout(timer);
+      proc.stdout?.removeAllListeners();
+      proc.stderr?.removeAllListeners();
+      proc.removeAllListeners();
+      if (proc.exitCode === null) proc.kill('SIGTERM');
+      proc.unref();
     }
 
     if (timedOut) {
@@ -621,7 +628,8 @@ export class AIClient {
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
     const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch);
-    const trimmed = trimConversation(messages, config.MAX_CONTEXT_TOKENS);
+    const systemTokenEstimate = Math.ceil(systemPrompt.length / 4);
+    const trimmed = trimConversation(messages, Math.max(config.MAX_CONTEXT_TOKENS - systemTokenEstimate, 4096));
 
     const { key, release } = await this.keyPool.acquire('google', options.onQueuePosition);
 
@@ -683,9 +691,11 @@ export class AIClient {
 
       yield { type: 'stop', stopReason: hasToolCalls ? 'tool_use' : 'end_turn' } as StopEvent;
 
+      // Extract usage from the last chunk's metadata
+      const usageMeta = (response as any).usageMetadata;
       options.onUsage?.({
-        tokensIn: 0,
-        tokensOut: 0,
+        tokensIn: usageMeta?.promptTokenCount || 0,
+        tokensOut: usageMeta?.candidatesTokenCount || 0,
         model,
         keyId: key.id,
       });

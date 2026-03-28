@@ -76,7 +76,7 @@ export function createReviewCommand(
         const thinkingMsg = await interaction.editReply('Reviewing PR...');
 
         // Use the interaction's reply as the thinking message anchor
-        const streamer = new ResponseStreamer(channel as any, null as any);
+        const streamer = new ResponseStreamer(channel, thinkingMsg as any);
 
         const reviewPrompt = `You are doing a code review for PR #${prNumber} in ${owner}/${repo}.
 

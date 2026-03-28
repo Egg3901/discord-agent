@@ -142,6 +142,8 @@ export class SessionManager {
           messages: JSON.parse(row.messages || '[]'),
           repoContext: row.repo_context ? JSON.parse(row.repo_context) : undefined,
           modelOverride: row.model_override || undefined,
+          thinkingEnabled: row.thinking_enabled != null ? !!row.thinking_enabled : null,
+          thinkingBudget: row.thinking_budget || null,
           createdAt: row.created_at,
           lastActiveAt: row.last_active_at,
         };
@@ -161,8 +163,8 @@ export class SessionManager {
       const db = getDatabase();
       db.prepare(`
         INSERT OR REPLACE INTO sessions
-          (id, user_id, thread_id, channel_id, messages, repo_context, model_override, created_at, last_active_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, user_id, thread_id, channel_id, messages, repo_context, model_override, thinking_enabled, thinking_budget, created_at, last_active_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         session.id,
         session.userId,
@@ -171,6 +173,8 @@ export class SessionManager {
         JSON.stringify(session.messages),
         session.repoContext ? JSON.stringify(session.repoContext) : null,
         session.modelOverride || null,
+        session.thinkingEnabled != null ? (session.thinkingEnabled ? 1 : 0) : null,
+        session.thinkingBudget || null,
         session.createdAt,
         session.lastActiveAt,
       );

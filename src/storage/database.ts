@@ -82,6 +82,14 @@ function runMigrations(db: Database.Database): void {
     db.exec('ALTER TABLE sessions ADD COLUMN model_override TEXT');
   }
 
+  // Migration: add thinking columns to sessions if missing
+  if (!sessionCols.some((c: any) => c.name === 'thinking_enabled')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN thinking_enabled INTEGER');
+  }
+  if (!sessionCols.some((c: any) => c.name === 'thinking_budget')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN thinking_budget INTEGER');
+  }
+
   // Migration: claude_code_sessions table for cross-restart CC session continuity
   db.exec(`
     CREATE TABLE IF NOT EXISTS claude_code_sessions (

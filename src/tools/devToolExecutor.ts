@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -64,10 +64,14 @@ export class DevToolExecutor {
     }
 
     // Configure git credential helper when GITHUB_TOKEN is available
-    const extraEnv = await this.getGitCredentialEnv();
+    const { env: extraEnv, cleanup } = await this.getGitCredentialEnv();
 
-    // Split args for spawn — use shell to handle quoting
-    return this.exec('bash', ['-c', `git ${args}`], GIT_TIMEOUT_MS, extraEnv);
+    try {
+      // Split args for spawn — use shell to handle quoting
+      return await this.exec('bash', ['-c', `git ${args}`], GIT_TIMEOUT_MS, extraEnv);
+    } finally {
+      await cleanup();
+    }
   }
 
   private async buildProject(input: Record<string, unknown>): Promise<string> {
@@ -181,32 +185,37 @@ export class DevToolExecutor {
 
   /**
    * Build environment variables for git credential authentication.
-   * When GITHUB_TOKEN is available, creates a GIT_ASKPASS script that
-   * provides the token for HTTPS git operations (push, pull, clone).
-   * The token is passed via environment variable to avoid writing it to disk.
+   * When GITHUB_TOKEN is available, creates a temporary GIT_ASKPASS script
+   * that embeds the token directly (not via env var, to prevent sandbox scripts
+   * from reading it via `env` or `printenv`). The askpass script is deleted
+   * after the git command completes.
    */
-  private async getGitCredentialEnv(): Promise<Record<string, string>> {
-    if (!config.GITHUB_TOKEN) return {};
+  private async getGitCredentialEnv(): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
+    if (!config.GITHUB_TOKEN) return { env: {}, cleanup: async () => {} };
 
     try {
-      // Create a minimal askpass script that reads the token from an env var.
-      // Git calls this for both username and password prompts — return the
-      // token for both (GitHub accepts the token as the password with any username).
-      const askpassPath = join(this.sandboxDir, '.git-askpass.sh');
+      const askpassPath = join(this.sandboxDir, `.git-askpass-${Date.now()}.sh`);
+      // Embed the token directly in the script so it's not visible in env.
+      // The script is created with restricted permissions and deleted after use.
+      const token = config.GITHUB_TOKEN;
       await writeFile(
         askpassPath,
-        '#!/bin/sh\ncase "$1" in\n  *sername*) echo "x-access-token" ;;\n  *) echo "$GIT_AUTH_TOKEN" ;;\nesac\n',
+        `#!/bin/sh\ncase "$1" in\n  *sername*) echo "x-access-token" ;;\n  *) echo "${token}" ;;\nesac\n`,
         { mode: 0o700 },
       );
 
       return {
-        GIT_ASKPASS: askpassPath,
-        GIT_AUTH_TOKEN: config.GITHUB_TOKEN,
-        GIT_TERMINAL_PROMPT: '0',
+        env: {
+          GIT_ASKPASS: askpassPath,
+          GIT_TERMINAL_PROMPT: '0',
+        },
+        cleanup: async () => {
+          try { await unlink(askpassPath); } catch { /* ignore */ }
+        },
       };
     } catch (err) {
       logger.warn({ err }, 'Failed to set up git credentials');
-      return {};
+      return { env: {}, cleanup: async () => {} };
     }
   }
 

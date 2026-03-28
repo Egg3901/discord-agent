@@ -2,9 +2,12 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type AutocompleteInteraction,
+  type GuildMember,
 } from 'discord.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { RepoFetcher } from '../../github/repoFetcher.js';
+import { isAllowed } from '../middleware/permissions.js';
+import { formatApiError } from '../../utils/errors.js';
 import { logger } from '../../utils/logger.js';
 import type { CommandHandler } from './types.js';
 
@@ -47,6 +50,14 @@ export function createRepoCommand(
     },
 
     async execute(interaction: ChatInputCommandInteraction) {
+      if (!isAllowed(interaction.member as GuildMember | null)) {
+        await interaction.reply({
+          content: 'You do not have a role that allows using this bot.',
+          ephemeral: true,
+        });
+        return;
+      }
+
       const threadId = interaction.channelId;
       const session = sessionManager.getByThread(threadId);
 
@@ -95,10 +106,13 @@ export function createRepoCommand(
           `Repository context loaded from **${owner}/${repo}**:\n${fileList}\n\nAgent mode enabled — the AI can now read files, list directories, and search code in the repo.`,
         );
       } catch (err) {
+        const msg = formatApiError(err);
         logger.error({ err }, 'Error fetching repo');
-        await interaction.editReply(
-          'Failed to fetch repository. Make sure the URL is valid and the repo is accessible.',
-        );
+        if (interaction.deferred) {
+          await interaction.editReply(msg).catch(() => {});
+        } else {
+          await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+        }
       }
     },
   };
