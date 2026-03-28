@@ -83,10 +83,9 @@ export class DevToolExecutor {
   }
 
   private async detectBuildCommand(action: string): Promise<string | null> {
-    // If action doesn't match a known keyword, treat it as a custom command
     const knownActions = ['build', 'test', 'lint', 'typecheck'];
     if (!knownActions.includes(action)) {
-      return action; // custom command passthrough
+      return null; // reject unknown actions — use run_terminal for custom commands
     }
 
     // Check for package.json (Node.js)

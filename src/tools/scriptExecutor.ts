@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { writeFile, readFile, unlink, mkdir, readdir, stat, rm } from 'node:fs/promises';
-import { join, normalize, resolve } from 'node:path';
+import { join, normalize, resolve, relative, isAbsolute, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -44,7 +44,8 @@ export async function getSandboxDir(sessionId?: string): Promise<string> {
  */
 function safePath(sandboxDir: string, userPath: string): string | null {
   const resolved = resolve(sandboxDir, normalize(userPath));
-  if (!resolved.startsWith(sandboxDir)) {
+  const rel = relative(sandboxDir, resolved);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
     return null;
   }
   return resolved;
@@ -113,7 +114,7 @@ export async function sandboxWriteFile(
 
   try {
     // Create parent directories
-    const parentDir = resolved.substring(0, resolved.lastIndexOf('/'));
+    const parentDir = dirname(resolved);
     await mkdir(parentDir, { recursive: true });
 
     await writeFile(resolved, content, 'utf-8');
