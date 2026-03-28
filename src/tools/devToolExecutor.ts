@@ -82,6 +82,16 @@ export class DevToolExecutor {
     // Configure git credential helper when GITHUB_TOKEN is available
     const { env: extraEnv, cleanup } = await this.getGitCredentialEnv();
 
+    // Set git author/committer identity to avoid Vercel ignoring bot-authored commits
+    if (config.GIT_AUTHOR_NAME) {
+      extraEnv['GIT_AUTHOR_NAME'] = config.GIT_AUTHOR_NAME;
+      extraEnv['GIT_COMMITTER_NAME'] = config.GIT_AUTHOR_NAME;
+    }
+    if (config.GIT_AUTHOR_EMAIL) {
+      extraEnv['GIT_AUTHOR_EMAIL'] = config.GIT_AUTHOR_EMAIL;
+      extraEnv['GIT_COMMITTER_EMAIL'] = config.GIT_AUTHOR_EMAIL;
+    }
+
     try {
       // Split args for spawn — use shell to handle quoting
       return await this.exec('bash', ['-c', `git ${args}`], GIT_TIMEOUT_MS, extraEnv);

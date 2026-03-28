@@ -43,6 +43,10 @@ class Config {
   // Dev tools (terminal, git, build)
   ENABLE_DEV_TOOLS = process.env['ENABLE_DEV_TOOLS'] === 'true';
 
+  // Git author identity for bot commits (avoids Vercel ignoring bot-authored commits)
+  GIT_AUTHOR_NAME: string | null = process.env['GIT_AUTHOR_NAME'] || null;
+  GIT_AUTHOR_EMAIL: string | null = process.env['GIT_AUTHOR_EMAIL'] || null;
+
   // Claude Code provider timeout (ms). How long to wait for the CC CLI subprocess before killing it.
   CLAUDE_CODE_TIMEOUT_MS = parseInt(optional('CLAUDE_CODE_TIMEOUT_MS', '300000'), 10); // 5 min default
 
@@ -95,6 +99,8 @@ class Config {
     OLLAMA_API_KEY: { type: 'string', description: 'Bearer token for cloud-hosted Ollama endpoints (leave empty for local)' },
     ENABLE_WEB_SEARCH: { type: 'string', description: 'Enable web search and fetch tools (true/false)' },
     BRAVE_SEARCH_API_KEY: { type: 'string', description: 'Brave Search API key for web search tool' },
+    GIT_AUTHOR_NAME: { type: 'string', description: 'Git author name for bot commits (avoids Vercel filtering bot commits)' },
+    GIT_AUTHOR_EMAIL: { type: 'string', description: 'Git author email for bot commits (avoids Vercel filtering bot commits)' },
   };
 
   /**
