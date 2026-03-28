@@ -6,47 +6,42 @@ export interface RepoContext {
 }
 
 export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean, scriptEnabled?: boolean, devToolsEnabled?: boolean, webSearchEnabled?: boolean, customPrompt?: string): string {
-  let prompt = `You are a software engineering assistant on Discord. Write, edit, review, debug, and explain code in any language.
+  let prompt = `You are a software engineering assistant on Discord. You can write, edit, review, debug, and explain code in any language.
 
-**How responses are displayed — understand this before responding:**
-The bot streams your response into a single Discord message that is edited in place. Tool calls are automatically shown as separate blockquote messages (e.g. \`> 📄 Reading \`src/index.ts\`\`) — you do not need to announce or narrate them. The user sees tool activity as it happens; your text is the final answer after tools finish.
+**How this works — read before responding:**
+Your text response streams into a single Discord message (edited in place, 2000 char limit per message — overflow auto-splits). Tool calls are displayed automatically as blockquote status lines (e.g. \`> 📄 Reading src/index.ts\`). The user sees tool activity in real time. Your text output is the final answer that appears after all tool work is done. You have a multi-step agent loop: you can call tools, see results, call more tools, and repeat until you have what you need — then write your answer.
+
+**Workflow — follow this order:**
+1. **Think** about what tools you need. Use extended thinking if enabled — work through the problem internally.
+2. **Call tools** to gather information, run code, search, etc. Call as many as needed across multiple iterations. Do not write text before or between tool calls — the user already sees tool activity.
+3. **Write one response** when you have the answer. This is the only text the user reads.
 
 **Response rules:**
-- Call tools first. Do not write anything before tool calls — the bot shows tool progress automatically.
-- After tools finish, write one concise response. Do not summarize what the tools found step-by-step.
-- No preamble. No "I'll now...", "Let me...", "Sure!". Lead with the answer or code.
-- No walls of text. If your answer would be long, cut what isn't essential. The user can ask for more.
-- No spamming. One message, not five. Don't split thoughts across multiple short messages.
-- Use Discord markdown: \`\`\`lang for code blocks, **bold** for key terms, \`inline code\` for identifiers.
-- When showing code changes, use SEARCH/REPLACE blocks (see below), not full file dumps.
-- Only elaborate when asked or when the situation is genuinely complex.`;
+- No preamble, no narration. No "I'll now...", "Let me...", "Sure!", "Great question!". Lead with the answer.
+- No walls of text. Keep it short. If something isn't essential, cut it. The user can ask for more.
+- One response, not a running commentary. Don't narrate each tool result. Synthesize, then answer.
+- Use Discord markdown: \`\`\`lang for code, **bold** for emphasis, \`inline\` for identifiers.
+- When suggesting changes to existing code, use SEARCH/REPLACE blocks (below) — never dump full files.
+- Only elaborate when asked or when the problem genuinely requires it.
 
-  // Structured diffs instructions
-  prompt += `
-
-When suggesting changes to existing code, use SEARCH/REPLACE blocks instead of showing entire files:
-
+**SEARCH/REPLACE format for code changes:**
 \`\`\`
 <<<<<<< SEARCH
-[exact lines to find in the original code]
+[exact lines to find — must match whitespace and indentation]
 =======
 [replacement lines]
 >>>>>>> REPLACE
 \`\`\`
+- Keep SEARCH blocks small — just enough context to uniquely locate the code.
+- Use separate blocks for non-adjacent changes. Empty REPLACE section = deletion.
+- For entirely new files, use a fenced code block with the filename — not SEARCH/REPLACE.
 
-Rules for SEARCH/REPLACE blocks:
-- The SEARCH section must exactly match existing code, including whitespace and indentation.
-- Keep SEARCH blocks small and focused — just enough context to uniquely identify the location.
-- For new files, provide the full file content in a fenced code block with the filename (not a SEARCH/REPLACE block).
-- For deletions, use an empty REPLACE section.
-- When changes span multiple non-adjacent locations, use separate SEARCH/REPLACE blocks for each.`;
-
-  // Tool-use instructions
-  prompt += `
-
-**You have tools. Always attempt tasks using your tools before concluding something can't be done. Never tell the user to do something themselves if a tool could do it. If a tool call fails, retry with a corrected input or try an alternative tool — do not give up and redirect the user.**
-
-**Available tools — use ONLY the tools listed below. Do not call any tool not listed here.**`;
+**Tool usage — critical rules:**
+- You have tools. Always use them before concluding something can't be done.
+- Never tell the user to "do it themselves" when a tool can do it. Try first.
+- If a tool fails, retry with corrected input or try an alternative tool. Don't give up on first failure.
+- Use the most efficient tool for the job (e.g. \`search_files\` over recursive \`list_directory\`, \`read_files_batch\` over multiple \`read_file\` calls).
+- Use ONLY the tools listed below. Do not fabricate tool names.`;
 
   if (toolsEnabled) {
     prompt += `
@@ -157,8 +152,18 @@ export function estimateTokens(content: string | ContentBlock[]): number {
 }
 
 /**
+ * Check if a message contains tool_use or tool_result blocks.
+ */
+function hasToolBlocks(msg: { content: string | ContentBlock[] }): boolean {
+  if (typeof msg.content === 'string') return false;
+  return msg.content.some((b) => b.type === 'tool_use' || b.type === 'tool_result');
+}
+
+/**
  * Trim conversation history to fit within token budget.
  * Keeps system prompt + first message + last N messages.
+ * Preserves tool_use/tool_result pairs as atomic units to avoid orphaned
+ * tool_results that cause Anthropic API 400 errors.
  */
 export function trimConversation(
   messages: { role: 'user' | 'assistant'; content: string | ContentBlock[] }[],
@@ -174,12 +179,28 @@ export function trimConversation(
   const result = [messages[0]];
   let usedTokens = estimateTokens(messages[0].content);
 
-  // Add messages from the end until we hit the budget
+  // Add messages from the end until we hit the budget.
+  // Tool_use (assistant) + tool_result (user) pairs must be kept together.
   const tail: typeof messages = [];
   for (let i = messages.length - 1; i >= 1; i--) {
-    const tokens = estimateTokens(messages[i].content);
+    const msg = messages[i];
+    const tokens = estimateTokens(msg.content);
+
+    // If this is a tool_result message, we must also include the preceding
+    // assistant message that contains the matching tool_use blocks.
+    if (hasToolBlocks(msg) && msg.role === 'user' && i > 1) {
+      const prev = messages[i - 1];
+      const pairTokens = tokens + estimateTokens(prev.content);
+      if (usedTokens + pairTokens > maxTokens) break;
+      tail.unshift(msg);
+      tail.unshift(prev);
+      usedTokens += pairTokens;
+      i--; // skip the assistant message we just added
+      continue;
+    }
+
     if (usedTokens + tokens > maxTokens) break;
-    tail.unshift(messages[i]);
+    tail.unshift(msg);
     usedTokens += tokens;
   }
 
@@ -187,6 +208,12 @@ export function trimConversation(
     // Drop leading assistant messages from tail so we can insert an assistant bridge
     // without creating consecutive same-role pairs after the first (user) message.
     while (tail.length > 0 && tail[0].role !== 'user') {
+      // Don't drop tool_result messages — if leading message is a tool_result,
+      // drop it AND the assistant tool_use message was already excluded.
+      tail.shift();
+    }
+    // Also ensure we don't start with a tool_result user message (orphaned)
+    while (tail.length > 0 && tail[0].role === 'user' && hasToolBlocks(tail[0])) {
       tail.shift();
     }
     // Only add the bridge if tail has content — otherwise we'd create

@@ -4,12 +4,14 @@ import {
   type GuildMember,
 } from 'discord.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
+import type { AIClient } from '../../claude/aiClient.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { formatApiError } from '../../utils/errors.js';
 import type { CommandHandler } from './types.js';
 
 export function createSessionCommand(
   sessionManager: SessionManager,
+  aiClient?: AIClient,
 ): CommandHandler {
   return {
     data: new SlashCommandBuilder()
@@ -82,10 +84,11 @@ export function createSessionCommand(
           }
 
           session.messages = [];
-          // Clear CC session ID so next message starts fresh
+          // Clear CC session ID so next message starts fresh (both DB and in-memory map)
           import('../../storage/database.js').then(({ deleteClaudeCodeSession }) => {
             deleteClaudeCodeSession(session.id);
           }).catch(() => {});
+          aiClient?.clearClaudeCodeSession(session.id);
           await interaction.reply({ content: 'Session reset. Conversation history cleared and CC session restarted.', ephemeral: true });
         }
 

@@ -53,7 +53,7 @@ async function main() {
   const commands: CommandHandler[] = [
     createAskCommand(aiClient, rateLimiter, sessionManager),
     createCodeCommand(sessionManager, aiClient, rateLimiter, repoFetcher),
-    createSessionCommand(sessionManager),
+    createSessionCommand(sessionManager, aiClient),
     createAdminCommand(keyPool, sessionManager),
     createRepoCommand(sessionManager, repoFetcher),
     createConfigCommand(),

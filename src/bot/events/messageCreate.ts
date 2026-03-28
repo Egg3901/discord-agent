@@ -42,6 +42,12 @@ export function handleMessageCreate(
     const session = sessionManager.getByThread(threadId);
     if (!session) return;
 
+    // Reject concurrent messages while a response is being generated
+    if (session.busy) {
+      await message.reply('Still working on the previous message. Please wait for it to finish (or react with 🛑 to cancel).');
+      return;
+    }
+
     if (!rateLimiter.check(message.author.id)) {
       await message.reply('You\'re sending messages too fast. Please wait a moment.');
       return;
@@ -57,7 +63,7 @@ export function handleMessageCreate(
         if (attachment.contentType?.startsWith('image/') && attachment.size <= 5_242_880) {
           // Image attachment — base64 encode for vision
           try {
-            const resp = await fetch(attachment.url);
+            const resp = await fetch(attachment.url, { signal: AbortSignal.timeout(15_000) });
             const buffer = Buffer.from(await resp.arrayBuffer());
             imageAttachments.push({
               mediaType: attachment.contentType,
@@ -68,7 +74,7 @@ export function handleMessageCreate(
           }
         } else if (attachment.contentType?.startsWith('text/') || isCodeFile(attachment.name)) {
           try {
-            const resp = await fetch(attachment.url);
+            const resp = await fetch(attachment.url, { signal: AbortSignal.timeout(15_000) });
             const text = await resp.text();
             if (text.length <= 100_000) {
               content += `\n\n--- ${attachment.name} ---\n\`\`\`\n${text}\n\`\`\``;
@@ -92,7 +98,7 @@ export function handleMessageCreate(
     if (urls && urls.length > 0) {
       for (const url of urls.slice(0, 3)) { // Max 3 URLs
         try {
-          const resp = await fetch(url);
+          const resp = await fetch(url, { signal: AbortSignal.timeout(15_000) });
           if (resp.ok) {
             const text = await resp.text();
             if (text.length <= 100_000) {
@@ -110,6 +116,8 @@ export function handleMessageCreate(
 
     try {
       await channel.sendTyping();
+
+      session.busy = true;
 
       sessionManager.addMessage(threadId, {
         role: 'user',
@@ -269,8 +277,10 @@ export function handleMessageCreate(
       } finally {
         clearInterval(thinkingTimer);
         session.activeController = undefined;
+        session.busy = false;
       }
     } catch (err) {
+      session.busy = false;
       logger.error({ err, threadId }, 'Error handling thread message');
     }
   });

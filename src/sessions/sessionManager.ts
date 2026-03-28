@@ -148,13 +148,29 @@ export class SessionManager {
       ).all(Date.now() - STALE_SESSION_MS) as any[];
 
       for (const row of rows) {
+        const repoContext = row.repo_context ? JSON.parse(row.repo_context) : undefined;
+
+        // Derive repoOwner/repoName from repoContext.repoUrl so tool execution
+        // works correctly after a restart (these fields aren't stored in the DB).
+        let repoOwner: string | undefined;
+        let repoName: string | undefined;
+        if (repoContext?.repoUrl) {
+          const match = repoContext.repoUrl.match(/github\.com\/([^/]+)\/([^/.]+)/);
+          if (match) {
+            repoOwner = match[1];
+            repoName = match[2];
+          }
+        }
+
         const session: Session = {
           id: row.id,
           userId: row.user_id,
           threadId: row.thread_id,
           channelId: row.channel_id,
           messages: JSON.parse(row.messages || '[]'),
-          repoContext: row.repo_context ? JSON.parse(row.repo_context) : undefined,
+          repoContext,
+          repoOwner,
+          repoName,
           modelOverride: row.model_override || undefined,
           thinkingEnabled: row.thinking_enabled != null ? !!row.thinking_enabled : null,
           thinkingBudget: row.thinking_budget || null,

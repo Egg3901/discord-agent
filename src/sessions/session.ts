@@ -24,6 +24,9 @@ export interface Session {
   // Abort controller for cancelling in-flight requests
   activeController?: AbortController;
 
+  // True while a response is being generated — prevents concurrent message handling
+  busy?: boolean;
+
   // Timestamp when the user was warned about impending session expiry
   warnedAt?: number;
 }
