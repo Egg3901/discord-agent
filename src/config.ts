@@ -19,8 +19,9 @@ class Config {
   readonly DISCORD_CLIENT_ID = required('DISCORD_CLIENT_ID');
   readonly DISCORD_GUILD_ID = process.env['DISCORD_GUILD_ID'] || null;
 
-  // Anthropic
-  ANTHROPIC_MODEL = optional('ANTHROPIC_MODEL', 'claude-sonnet-4-20250514');
+  // Default model — uses Claude Code CLI (Max plan) by default.
+  // Set ANTHROPIC_MODEL env var or use /config set ANTHROPIC_MODEL to override.
+  ANTHROPIC_MODEL = optional('ANTHROPIC_MODEL', 'claude-code');
 
   // GitHub
   GITHUB_TOKEN: string | null = process.env['GITHUB_TOKEN'] || null;

@@ -2,6 +2,7 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
+import { splitMessage } from '../../utils/chunks.js';
 import type { CommandHandler } from './types.js';
 
 export function createHelpCommand(): CommandHandler {
@@ -57,7 +58,11 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 • Use \`/model\` to switch between Opus, Sonnet, and Haiku mid-session
 • Use \`/export\` to save a session as markdown for sharing or archiving`;
 
-      await interaction.reply({ content: help, ephemeral: true });
+      const chunks = splitMessage(help);
+      await interaction.reply({ content: chunks[0], ephemeral: true });
+      for (let i = 1; i < chunks.length; i++) {
+        await interaction.followUp({ content: chunks[i], ephemeral: true });
+      }
     },
   };
 }
