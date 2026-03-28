@@ -8,7 +8,7 @@ import {
 import { logger } from '../../utils/logger.js';
 import { formatApiError } from '../../utils/errors.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
-import { AIClient } from '../../claude/aiClient.js';
+import { AIClient, getProviderForModel } from '../../claude/aiClient.js';
 import { ResponseStreamer } from '../../claude/responseFormatter.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { isAllowed } from '../middleware/permissions.js';
@@ -141,8 +141,39 @@ export function handleMessageCreate(
           onUsage,
         };
 
-        if (hasTools) {
-          // Agentic mode: multi-step tool use loop
+        const effectiveModel = session.modelOverride || config.ANTHROPIC_MODEL;
+        const isCC = getProviderForModel(effectiveModel) === 'claude-code';
+
+        if (isCC) {
+          // Claude Code handles tools internally — stream events directly,
+          // displaying tool notifications without re-executing them.
+          const loopStart = Date.now();
+          let fullResponse = '';
+          let toolCallCount = 0;
+          let lastToolMsg: import('discord.js').Message | null = null;
+          for await (const event of aiClient.streamResponse(session.messages, baseStreamOptions)) {
+            if (controller.signal.aborted) break;
+            if (event.type === 'text') {
+              fullResponse += event.text;
+              await streamer.push(event.text);
+            } else if (event.type === 'tool_use') {
+              toolCallCount++;
+              const detail = formatCCToolDetail(event.name, event.input);
+              lastToolMsg = await channel.send(`> \u{1F527} \`${event.name}\`${detail ? ` ${detail}` : ''}`);
+            } else if (event.type === 'stop' && lastToolMsg) {
+              await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
+              lastToolMsg = null;
+            }
+          }
+          clearInterval(thinkingTimer);
+          await streamer.finish();
+          sessionManager.addMessage(threadId, { role: 'assistant', content: fullResponse });
+          if (toolCallCount > 0) {
+            const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
+            await channel.send(`<@${message.author.id}> Done \u2014 ${toolCallCount} tool call(s) in ${elapsed}s`).catch(() => {});
+          }
+        } else if (hasTools) {
+          // Agentic mode for Anthropic / Gemini
           const toolExecutor = new ToolExecutor(
             hasRepo ? repoFetcher : null,
             session.repoOwner || '',
@@ -155,10 +186,7 @@ export function handleMessageCreate(
             aiClient,
             session.messages,
             toolExecutor,
-            {
-              ...baseStreamOptions,
-              enableRepoTools: !!hasRepo,
-            },
+            { ...baseStreamOptions, enableRepoTools: !!hasRepo },
             {
               onTextChunk: (text) => streamer.push(text),
               onToolStart: async (name, input) => {
@@ -178,40 +206,27 @@ export function handleMessageCreate(
               onThinking: async () => {},
             },
           );
-
           clearInterval(thinkingTimer);
           await streamer.finish();
-
-          // Persist all new messages from the agent loop
           for (const msg of result.newMessages) {
             sessionManager.addMessage(threadId, msg);
           }
-
           if (result.toolCallCount > 0) {
             const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
-            logger.info(
-              { sessionId: session.id, toolCalls: result.toolCallCount, iterations: result.iterations },
-              'Agent loop completed',
-            );
-            // Ping user so they know the multi-step task is done
+            logger.info({ sessionId: session.id, toolCalls: result.toolCallCount, iterations: result.iterations }, 'Agent loop completed');
             await channel.send(`<@${message.author.id}> Done \u2014 ${result.toolCallCount} tool call(s) in ${elapsed}s`).catch(() => {});
           }
         } else {
-          // Simple streaming mode (no repo attached)
+          // Simple streaming mode
           let fullResponse = '';
           for await (const chunk of aiClient.streamText(session.messages, baseStreamOptions)) {
             if (controller.signal.aborted) break;
             fullResponse += chunk;
             await streamer.push(chunk);
           }
-
           clearInterval(thinkingTimer);
           await streamer.finish();
-
-          sessionManager.addMessage(threadId, {
-            role: 'assistant',
-            content: fullResponse,
-          });
+          sessionManager.addMessage(threadId, { role: 'assistant', content: fullResponse });
         }
       } catch (err: any) {
         clearInterval(thinkingTimer);
@@ -304,4 +319,26 @@ function formatToolDetail(name: string, input: Record<string, unknown>): string 
     default:
       return '';
   }
+}
+
+/** Format a short detail string for a Claude Code internal tool call notification. */
+function formatCCToolDetail(name: string, input: Record<string, unknown>): string {
+  const n = name.toLowerCase();
+  if (n === 'bash' || n === 'runterminal') {
+    const cmd = input.command || input.cmd;
+    return cmd ? `\`${String(cmd).slice(0, 80)}\`` : '';
+  }
+  if (n === 'read' || n === 'write' || n === 'edit' || n === 'multiedit') {
+    const path = input.file_path || input.path;
+    return path ? `\`${String(path)}\`` : '';
+  }
+  if (n === 'glob') return input.pattern ? `\`${String(input.pattern)}\`` : '';
+  if (n === 'grep') {
+    const p = input.pattern || input.query;
+    return p ? `for \`${String(p).slice(0, 60)}\`` : '';
+  }
+  if (n === 'webfetch' || n === 'web_fetch') return input.url ? `\`${String(input.url).slice(0, 80)}\`` : '';
+  if (n === 'websearch' || n === 'web_search') return input.query ? `\`${String(input.query).slice(0, 60)}\`` : '';
+  const first = Object.entries(input)[0];
+  return first ? `${first[0]}: \`${String(first[1]).slice(0, 60)}\`` : '';
 }

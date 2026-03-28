@@ -545,8 +545,9 @@ export class AIClient {
               keyId: 'claude-code',
             });
           }
-          const event = this.handleClaudeCodeMessage(msg, sessionKey);
-          if (event) yield event;
+          for (const event of this.handleClaudeCodeMessage(msg, sessionKey)) {
+            yield event;
+          }
         } catch {
           // Not valid JSON, skip
         }
@@ -564,7 +565,7 @@ export class AIClient {
   private handleClaudeCodeMessage(
     msg: any,
     sessionKey: string,
-  ): AIStreamEvent | null {
+  ): AIStreamEvent[] {
     switch (msg.type) {
       case 'system':
         if (msg.subtype === 'init' && msg.session_id) {
@@ -572,36 +573,43 @@ export class AIClient {
           saveClaudeCodeSession(sessionKey, msg.session_id);
           logger.debug({ sessionId: msg.session_id }, 'Claude Code session initialized');
         }
-        return null;
+        return [];
 
       case 'assistant': {
         // Detect auth errors from Claude Code
         if (msg.error === 'authentication_failed') {
           logger.error('Claude Code authentication failed — API key may be invalid');
-          return { type: 'text', text: 'Claude Code authentication failed. The API key may be invalid — try `/admin removekey` and `/admin addkey` with a fresh key.' } as TextChunkEvent;
+          return [{ type: 'text', text: 'Claude Code authentication failed. The API key may be invalid — try `/admin removekey` and `/admin addkey` with a fresh key.' } as TextChunkEvent];
         }
 
-        // Extract text from content blocks
         const content = msg.message?.content;
-        if (!Array.isArray(content)) return null;
+        if (!Array.isArray(content)) return [];
 
-        const textParts = content
-          .filter((b: any) => b.type === 'text' && b.text)
-          .map((b: any) => b.text);
-
-        if (textParts.length > 0) {
-          return { type: 'text', text: textParts.join('') } as TextChunkEvent;
+        const events: AIStreamEvent[] = [];
+        for (const block of content) {
+          if (block.type === 'text' && block.text) {
+            events.push({ type: 'text', text: block.text } as TextChunkEvent);
+          } else if (block.type === 'tool_use' && block.name) {
+            // Emit tool_use events so callers can display notifications.
+            // CC handles execution internally — callers must NOT re-execute these.
+            events.push({
+              type: 'tool_use',
+              id: block.id || '',
+              name: block.name,
+              input: block.input || {},
+            } as ToolUseEvent);
+          }
         }
-        return null;
+        return events;
       }
 
       case 'result':
         // The result event contains the final combined text, but we already
         // streamed it via assistant messages, so skip to avoid duplication.
-        return null;
+        return [];
 
       default:
-        return null;
+        return [];
     }
   }
 

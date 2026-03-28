@@ -12,7 +12,7 @@ import {
 } from 'discord.js';
 import { generateImprovedPrompt } from './improve.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
-import { AIClient } from '../../claude/aiClient.js';
+import { AIClient, getProviderForModel } from '../../claude/aiClient.js';
 import { ResponseStreamer } from '../../claude/responseFormatter.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { formatApiError } from '../../utils/errors.js';
@@ -207,13 +207,64 @@ export function createCodeCommand(
           thinkingMsg.edit(`Thinking... (${secs}s)`).catch(() => {});
         }, 15_000);
 
+        const streamOptions = {
+          repoContext: session.repoContext,
+          modelOverride: session.modelOverride,
+          sessionId: session.id,
+          onQueuePosition: (pos: number) => {
+            thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
+          },
+          onUsage: (usage: import('../../claude/aiClient.js').UsageInfo) => {
+            import('../../storage/database.js').then(({ logUsage }) => {
+              logUsage({
+                userId: interaction.user.id,
+                sessionId: session.id,
+                keyId: usage.keyId,
+                tokensIn: usage.tokensIn,
+                tokensOut: usage.tokensOut,
+                model: usage.model,
+                costUsd: usage.costUsd,
+              });
+            }).catch(() => {});
+          },
+        };
+
         try {
           const hasRepo = repoOwner && repoName;
           const hasWebSearch = config.ENABLE_WEB_SEARCH;
-          const hasTools = hasRepo || config.ENABLE_SCRIPT_EXECUTION || config.ENABLE_DEV_TOOLS || hasWebSearch;
+          const effectiveModel = session.modelOverride || config.ANTHROPIC_MODEL;
+          const isCC = getProviderForModel(effectiveModel) === 'claude-code';
 
-          if (hasTools) {
-            // Agentic mode
+          if (isCC) {
+            // Claude Code: handles tools internally — stream events directly,
+            // displaying tool notifications without re-executing them.
+            const loopStart = Date.now();
+            let fullResponse = '';
+            let toolCallCount = 0;
+            let lastToolMsg: import('discord.js').Message | null = null;
+            for await (const event of aiClient.streamResponse(session.messages, { ...streamOptions, enableWebSearch: hasWebSearch })) {
+              if (event.type === 'text') {
+                fullResponse += event.text;
+                await streamer.push(event.text);
+              } else if (event.type === 'tool_use') {
+                toolCallCount++;
+                const detail = formatCCToolDetail(event.name, event.input);
+                lastToolMsg = await thread.send(`> \u{1F527} \`${event.name}\`${detail ? ` ${detail}` : ''}`);
+              } else if (event.type === 'stop' && lastToolMsg) {
+                // Append a checkmark to the last tool message when a stop arrives
+                await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
+                lastToolMsg = null;
+              }
+            }
+            clearInterval(thinkingTimer);
+            await streamer.finish();
+            sessionManager.addMessage(thread.id, { role: 'assistant', content: fullResponse });
+            if (toolCallCount > 0) {
+              const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
+              await thread.send(`<@${interaction.user.id}> Done \u2014 ${toolCallCount} tool call(s) in ${elapsed}s`);
+            }
+          } else if (hasRepo || config.ENABLE_SCRIPT_EXECUTION || config.ENABLE_DEV_TOOLS || hasWebSearch) {
+            // Agentic mode for Anthropic / Gemini
             const loopStart = Date.now();
             const toolExecutor = new ToolExecutor(
               hasRepo ? repoFetcher : null,
@@ -226,29 +277,7 @@ export function createCodeCommand(
               aiClient,
               session.messages,
               toolExecutor,
-              {
-                repoContext: session.repoContext,
-                modelOverride: session.modelOverride,
-                enableRepoTools: !!hasRepo,
-                enableWebSearch: hasWebSearch,
-                sessionId: session.id,
-                onQueuePosition: (pos) => {
-                  thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
-                },
-                onUsage: (usage) => {
-                  import('../../storage/database.js').then(({ logUsage }) => {
-                    logUsage({
-                      userId: interaction.user.id,
-                      sessionId: session.id,
-                      keyId: usage.keyId,
-                      tokensIn: usage.tokensIn,
-                      tokensOut: usage.tokensOut,
-                      model: usage.model,
-                      costUsd: usage.costUsd,
-                    });
-                  }).catch(() => {});
-                },
-              },
+              { ...streamOptions, enableRepoTools: !!hasRepo, enableWebSearch: hasWebSearch },
               {
                 onTextChunk: (text) => streamer.push(text),
                 onToolStart: async (name, input) => {
@@ -268,57 +297,25 @@ export function createCodeCommand(
                 onThinking: async () => {},
               },
             );
-
             clearInterval(thinkingTimer);
             await streamer.finish();
-
             for (const msg of result.newMessages) {
               sessionManager.addMessage(thread.id, msg);
             }
-
-            // Ping user on completion of multi-step tasks
             if (result.toolCallCount > 0) {
               const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
               await thread.send(`<@${interaction.user.id}> Done \u2014 ${result.toolCallCount} tool call(s) in ${elapsed}s`);
             }
           } else {
-            clearInterval(thinkingTimer);
             // Simple streaming mode
+            clearInterval(thinkingTimer);
             let fullResponse = '';
-            for await (const chunk of aiClient.streamText(
-              session.messages,
-              {
-                repoContext: session.repoContext,
-                modelOverride: session.modelOverride,
-                enableWebSearch: hasWebSearch,
-                sessionId: session.id,
-                onQueuePosition: (pos) => {
-                  thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
-                },
-                onUsage: (usage) => {
-                  import('../../storage/database.js').then(({ logUsage }) => {
-                    logUsage({
-                      userId: interaction.user.id,
-                      sessionId: session.id,
-                      keyId: usage.keyId,
-                      tokensIn: usage.tokensIn,
-                      tokensOut: usage.tokensOut,
-                      model: usage.model,
-                      costUsd: usage.costUsd,
-                    });
-                  }).catch(() => {});
-                },
-              },
-            )) {
+            for await (const chunk of aiClient.streamText(session.messages, { ...streamOptions, enableWebSearch: hasWebSearch })) {
               fullResponse += chunk;
               await streamer.push(chunk);
             }
             await streamer.finish();
-
-            sessionManager.addMessage(thread.id, {
-              role: 'assistant',
-              content: fullResponse,
-            });
+            sessionManager.addMessage(thread.id, { role: 'assistant', content: fullResponse });
           }
         } catch (err) {
           clearInterval(thinkingTimer);
@@ -334,4 +331,39 @@ export function createCodeCommand(
       }
     },
   };
+}
+
+/**
+ * Format a short detail string for a Claude Code internal tool call notification.
+ * CC uses its own tool names (Bash, Read, Write, Glob, Grep, WebFetch, etc.)
+ */
+function formatCCToolDetail(name: string, input: Record<string, unknown>): string {
+  const n = name.toLowerCase();
+  if (n === 'bash' || n === 'runterminal') {
+    const cmd = input.command || input.cmd;
+    return cmd ? `\`${String(cmd).slice(0, 80)}\`` : '';
+  }
+  if (n === 'read' || n === 'write' || n === 'edit' || n === 'multiedit') {
+    const path = input.file_path || input.path;
+    return path ? `\`${String(path)}\`` : '';
+  }
+  if (n === 'glob') {
+    const pattern = input.pattern;
+    return pattern ? `\`${String(pattern)}\`` : '';
+  }
+  if (n === 'grep') {
+    const pattern = input.pattern || input.query;
+    return pattern ? `for \`${String(pattern).slice(0, 60)}\`` : '';
+  }
+  if (n === 'webfetch' || n === 'web_fetch') {
+    const url = input.url;
+    return url ? `\`${String(url).slice(0, 80)}\`` : '';
+  }
+  if (n === 'websearch' || n === 'web_search') {
+    const query = input.query;
+    return query ? `\`${String(query).slice(0, 60)}\`` : '';
+  }
+  // Generic fallback: show first key-value pair
+  const first = Object.entries(input)[0];
+  return first ? `${first[0]}: \`${String(first[1]).slice(0, 60)}\`` : '';
 }
