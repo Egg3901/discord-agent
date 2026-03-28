@@ -201,6 +201,10 @@ export function createCodeCommand(
           repoContext,
         );
 
+        // Lock the effective model at session creation so follow-up messages
+        // don't break if the global default changes mid-session.
+        session.modelOverride = config.ANTHROPIC_MODEL;
+
         // Set repo owner/name on session for tool executor
         if (repoOwner && repoName) {
           session.repoOwner = repoOwner;
