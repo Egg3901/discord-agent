@@ -9,6 +9,7 @@ import { buildSystemPrompt, trimConversation, type RepoContext } from './context
 import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations, toOpenAITools } from '../tools/toolDefinitions.js';
 import { getSandboxDir } from '../tools/scriptExecutor.js';
 import { saveClaudeCodeSession, loadClaudeCodeSessionMap } from '../storage/database.js';
+import { isModelAvailable, isOllamaReachable, pullOllamaModel } from './ollamaModels.js';
 import type { Provider } from '../keys/types.js';
 
 // --- Content block types (provider-agnostic) ---
@@ -92,6 +93,8 @@ export interface StreamOptions {
   sessionId?: string;
   /** Custom system prompt to prepend (persona) */
   customSystemPrompt?: string;
+  /** Called with status messages during setup (e.g. "Pulling model...") */
+  onStatus?: (status: string) => void;
 }
 
 /**
@@ -790,6 +793,36 @@ export class AIClient {
     const ollamaModel = model.replace(/^ollama\//, '').replace(/--/g, ':');
     const baseUrl = config.OLLAMA_BASE_URL;
 
+    // Check connectivity first
+    if (!await isOllamaReachable()) {
+      const err = new Error(
+        `Cannot connect to Ollama at ${baseUrl}. Ensure Ollama is running (\`ollama serve\`) ` +
+        `or change the URL with \`/config set OLLAMA_BASE_URL <url>\`.`,
+      );
+      (err as any).status = 503;
+      (err as any).userMessage = err.message;
+      throw err;
+    }
+
+    // Auto-pull model if not available locally
+    if (!await isModelAvailable(ollamaModel)) {
+      options.onStatus?.(`Downloading **${ollamaModel}**... this may take a few minutes.`);
+      logger.info({ model: ollamaModel }, 'Ollama model not found locally, pulling');
+
+      let lastPercent = -1;
+      for await (const progress of pullOllamaModel(ollamaModel)) {
+        // Throttle updates to avoid Discord rate limits (only update every 5%)
+        if (progress.percent !== null && progress.percent !== lastPercent && progress.percent % 5 === 0) {
+          lastPercent = progress.percent;
+          options.onStatus?.(`Downloading **${ollamaModel}**... ${progress.percent}%`);
+        } else if (progress.status && !progress.total) {
+          // Non-download phases (verifying, writing layers, etc.)
+          options.onStatus?.(`Loading **${ollamaModel}**... ${progress.status}`);
+        }
+      }
+      options.onStatus?.(`**${ollamaModel}** ready.`);
+    }
+
     logger.debug({ model: ollamaModel, baseUrl, provider: 'ollama' }, 'Starting Ollama stream');
 
     // Convert messages to OpenAI format
@@ -981,17 +1014,6 @@ export class AIClient {
       });
     } catch (err: any) {
       if (err?.name === 'AbortError') return;
-      // Provide a clear error when Ollama isn't reachable
-      if (err?.cause?.code === 'ECONNREFUSED' || err?.message?.includes('fetch failed')) {
-        const friendlyErr = new Error(
-          `Cannot connect to Ollama at ${baseUrl}. Ensure Ollama is running (\`ollama serve\`) and the URL is correct. ` +
-          `You can change it with \`/config set OLLAMA_BASE_URL <url>\`.`,
-        );
-        (friendlyErr as any).status = 503;
-        (friendlyErr as any).userMessage = friendlyErr.message;
-        logger.error({ err, model: ollamaModel, baseUrl }, 'Ollama connection failed');
-        throw friendlyErr;
-      }
       logger.error({ err, model: ollamaModel }, 'Ollama API error');
       throw err;
     }

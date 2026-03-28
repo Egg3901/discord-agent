@@ -170,6 +170,9 @@ export function handleMessageCreate(
           onQueuePosition: (pos: number) => {
             thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
           },
+          onStatus: (status: string) => {
+            thinkingMsg.edit(status).catch(() => {});
+          },
           onUsage,
         };
 

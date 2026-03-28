@@ -1,15 +1,22 @@
 import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
+  type AutocompleteInteraction,
   type GuildMember,
 } from 'discord.js';
 import { config } from '../../config.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { formatApiError } from '../../utils/errors.js';
+import { listOllamaModels, formatModelSize } from '../../claude/ollamaModels.js';
+import { logger } from '../../utils/logger.js';
 import type { CommandHandler } from './types.js';
 
-const AVAILABLE_MODELS = [
+/**
+ * Static models from cloud providers (always available).
+ * Ollama models are fetched dynamically from the server.
+ */
+const STATIC_MODELS = [
   // Claude Code (uses host's CLI login / Max plan, or pool API key)
   { name: 'Claude Code (default)', value: 'claude-code' },
   { name: 'Claude Code — Opus', value: 'claude-code-opus' },
@@ -24,15 +31,16 @@ const AVAILABLE_MODELS = [
   { name: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
   { name: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
   { name: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
-  // Ollama (local)
-  { name: 'Qwen 2.5 Coder 32B', value: 'ollama/qwen2.5-coder--32b' },
-  { name: 'Qwen 2.5 Coder 14B', value: 'ollama/qwen2.5-coder--14b' },
-  { name: 'Qwen 2.5 Coder 7B', value: 'ollama/qwen2.5-coder--7b' },
-  { name: 'Qwen3 30B A3B', value: 'ollama/qwen3--30b-a3b' },
-  { name: 'Qwen3 8B', value: 'ollama/qwen3--8b' },
-  { name: 'DeepSeek Coder V2', value: 'ollama/deepseek-coder-v2' },
-  { name: 'Llama 3.1 8B', value: 'ollama/llama3.1--8b' },
 ];
+
+/**
+ * Convert an Ollama model name (e.g. "qwen2.5-coder:32b") to the
+ * value format used by getProviderForModel ("ollama/qwen2.5-coder--32b").
+ * Colons are encoded as "--" because Discord choice values don't handle colons well.
+ */
+function encodeOllamaModelValue(name: string): string {
+  return `ollama/${name.replace(/:/g, '--')}`;
+}
 
 export function createModelCommand(
   sessionManager: SessionManager,
@@ -44,9 +52,9 @@ export function createModelCommand(
       .addStringOption((opt) =>
         opt
           .setName('model')
-          .setDescription('Model to use')
+          .setDescription('Model to use (type to search, Ollama models fetched live)')
           .setRequired(true)
-          .addChoices(...AVAILABLE_MODELS),
+          .setAutocomplete(true),
       )
       .addStringOption((opt) =>
         opt
@@ -58,6 +66,40 @@ export function createModelCommand(
             { name: 'Default for all new sessions', value: 'default' },
           ),
       ),
+
+    async autocomplete(interaction: AutocompleteInteraction) {
+      const focused = interaction.options.getFocused().toLowerCase();
+      try {
+        // Start with static models
+        const choices: { name: string; value: string }[] = [];
+
+        for (const m of STATIC_MODELS) {
+          if (!focused || m.name.toLowerCase().includes(focused) || m.value.toLowerCase().includes(focused)) {
+            choices.push(m);
+          }
+        }
+
+        // Fetch Ollama models dynamically (with short timeout — non-blocking)
+        const ollamaModels = await listOllamaModels();
+        for (const m of ollamaModels) {
+          const displayName = `Ollama: ${m.name} (${formatModelSize(m.size)})`;
+          const value = encodeOllamaModelValue(m.name);
+          if (!focused || displayName.toLowerCase().includes(focused) || m.name.toLowerCase().includes(focused)) {
+            choices.push({ name: displayName.slice(0, 100), value });
+          }
+        }
+
+        // Discord limits to 25 autocomplete results
+        await interaction.respond(choices.slice(0, 25));
+      } catch (err) {
+        logger.debug({ err }, 'Model autocomplete failed');
+        // Fallback to static models only
+        const fallback = STATIC_MODELS.filter(
+          (m) => !focused || m.name.toLowerCase().includes(focused) || m.value.toLowerCase().includes(focused),
+        );
+        await interaction.respond(fallback.slice(0, 25));
+      }
+    },
 
     async execute(interaction: ChatInputCommandInteraction) {
       if (!isAllowed(interaction.member as GuildMember | null)) {
@@ -71,7 +113,10 @@ export function createModelCommand(
       try {
         const model = interaction.options.getString('model', true);
         const scope = interaction.options.getString('scope') || 'session';
-        const modelLabel = AVAILABLE_MODELS.find((m) => m.value === model)?.name ?? model;
+
+        // Build a human-readable label
+        const staticMatch = STATIC_MODELS.find((m) => m.value === model);
+        const modelLabel = staticMatch?.name ?? model.replace(/^ollama\//, '').replace(/--/g, ':');
         const provider = model === 'claude-code' || model.startsWith('claude-code-')
           ? 'Claude Code'
           : model.startsWith('gemini-') ? 'Google'

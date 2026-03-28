@@ -235,6 +235,9 @@ export function createCodeCommand(
           onQueuePosition: (pos: number) => {
             thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
           },
+          onStatus: (status: string) => {
+            thinkingMsg.edit(status).catch(() => {});
+          },
           onUsage: (usage: import('../../claude/aiClient.js').UsageInfo) => {
             import('../../storage/database.js').then(({ logUsage }) => {
               logUsage({
