@@ -20,6 +20,7 @@ import { createCancelCommand } from './bot/commands/cancel.js';
 import { createSandboxCommand } from './bot/commands/sandbox.js';
 import { createExportCommand } from './bot/commands/export.js';
 import { createReviewCommand } from './bot/commands/review.js';
+import { createImproveCommand } from './bot/commands/improve.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
@@ -61,6 +62,7 @@ async function main() {
     createSandboxCommand(sessionManager),
     createExportCommand(sessionManager),
     createReviewCommand(aiClient, rateLimiter, repoFetcher),
+    createImproveCommand(aiClient, rateLimiter),
   ];
 
   const commandMap = new Map<string, CommandHandler>();

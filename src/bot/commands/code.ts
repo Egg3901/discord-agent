@@ -1,11 +1,16 @@
 import {
   SlashCommandBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ComponentType,
   ChannelType,
   type ChatInputCommandInteraction,
   type AutocompleteInteraction,
   type TextChannel,
   type ThreadChannel,
 } from 'discord.js';
+import { generateImprovedPrompt } from './improve.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { AIClient } from '../../claude/aiClient.js';
 import { ResponseStreamer } from '../../claude/responseFormatter.js';
@@ -76,10 +81,13 @@ export function createCodeCommand(
         return;
       }
 
-      const prompt = interaction.options.getString('prompt', true);
+      const originalPrompt = interaction.options.getString('prompt', true);
       const repoUrl = interaction.options.getString('repo');
 
-      await interaction.deferReply();
+      // Defer ephemeral so we can show the improve prompt flow privately
+      await interaction.deferReply({ ephemeral: true });
+
+      let prompt = originalPrompt;
 
       try {
         const channel = interaction.channel;
@@ -87,6 +95,46 @@ export function createCodeCommand(
           await interaction.editReply('This command must be used in a text channel.');
           return;
         }
+
+        // --- Prompt improvement flow ---
+        const improved = await generateImprovedPrompt(aiClient, originalPrompt);
+        const meaningfullyDifferent = improved.trim() !== originalPrompt.trim() && improved.length > 0;
+
+        if (meaningfullyDifferent) {
+          const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId('use_improved')
+              .setLabel('✅ Use Improved')
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId('use_original')
+              .setLabel('Keep Original')
+              .setStyle(ButtonStyle.Secondary),
+          );
+
+          const preview = [
+            `**Original:** ${originalPrompt}`,
+            ``,
+            `**Suggested:** ${improved}`,
+          ].join('\n').slice(0, 1800);
+
+          await interaction.editReply({ content: preview, components: [row] });
+
+          try {
+            const btn = await interaction.awaitMessageComponent({
+              filter: (i) => i.user.id === interaction.user.id,
+              time: 30_000,
+              componentType: ComponentType.Button,
+            });
+            prompt = btn.customId === 'use_improved' ? improved : originalPrompt;
+            await btn.deferUpdate();
+          } catch {
+            // Timed out — use original
+          }
+
+          await interaction.editReply({ content: `Starting: *${prompt.slice(0, 120)}${prompt.length > 120 ? '…' : ''}*`, components: [] });
+        }
+        // --- End improve flow ---
 
         const threadName = prompt.slice(0, 95) + (prompt.length > 95 ? '...' : '');
         const thread = await (channel as TextChannel).threads.create({
