@@ -19,7 +19,8 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 
 **Commands:**
 > \`/ask <question>\` — One-shot question (no session, quick answer)
-> \`/code <prompt> [repo]\` — Start a coding session in a new thread
+> \`/code <prompt> [repo]\` — Start a coding session in a new thread (auto-improves prompt when using Anthropic/Gemini models)
+> \`/improve <prompt>\` — Preview an AI-improved version of your prompt before using it
 > \`/review <pr>\` — Review a GitHub PR (URL or \`owner/repo#123\`)
 > \`/repo <url> [paths]\` — Attach a GitHub repo as context to current session
 > \`/model <model> [scope]\` — Switch Claude model (this session or default)
