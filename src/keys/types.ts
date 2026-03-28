@@ -1,5 +1,5 @@
 export type KeyStatus = 'healthy' | 'degraded' | 'dead';
-export type Provider = 'anthropic' | 'google' | 'claude-code';
+export type Provider = 'anthropic' | 'google' | 'claude-code' | 'ollama';
 
 export interface ManagedKey {
   id: string;

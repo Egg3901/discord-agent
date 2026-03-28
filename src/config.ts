@@ -51,6 +51,9 @@ class Config {
   // when the bot runs as a different user (e.g. systemd service).
   CLAUDE_CODE_HOME: string | null = process.env['CLAUDE_CODE_HOME'] || null;
 
+  // Ollama (local models)
+  OLLAMA_BASE_URL = optional('OLLAMA_BASE_URL', 'http://localhost:11434');
+
   // Web search (Brave Search API)
   ENABLE_WEB_SEARCH = process.env['ENABLE_WEB_SEARCH'] === 'true';
   BRAVE_SEARCH_API_KEY: string | null = process.env['BRAVE_SEARCH_API_KEY'] || null;
@@ -86,6 +89,7 @@ class Config {
     ENABLE_DEV_TOOLS: { type: 'string', description: 'Enable terminal, git, and build tools (true/false)' },
     CLAUDE_CODE_TIMEOUT_MS: { type: 'number', description: 'Timeout in ms for Claude Code CLI subprocess (default: 300000 = 5 min)' },
     CLAUDE_CODE_HOME: { type: 'string', description: 'HOME directory for Claude Code CLI login (e.g. /home/myuser)' },
+    OLLAMA_BASE_URL: { type: 'string', description: 'Ollama server URL (default: http://localhost:11434)' },
     ENABLE_WEB_SEARCH: { type: 'string', description: 'Enable web search and fetch tools (true/false)' },
     BRAVE_SEARCH_API_KEY: { type: 'string', description: 'Brave Search API key for web search tool' },
   };

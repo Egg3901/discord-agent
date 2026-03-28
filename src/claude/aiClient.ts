@@ -6,7 +6,7 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
 import { buildSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
-import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations } from '../tools/toolDefinitions.js';
+import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations, toOpenAITools } from '../tools/toolDefinitions.js';
 import { getSandboxDir } from '../tools/scriptExecutor.js';
 import { saveClaudeCodeSession, loadClaudeCodeSessionMap } from '../storage/database.js';
 import type { Provider } from '../keys/types.js';
@@ -107,6 +107,9 @@ export function getProviderForModel(model: string): Provider {
   if (GOOGLE_MODEL_PREFIXES.some((p) => model.startsWith(p))) {
     return 'google';
   }
+  if (model.startsWith('ollama/')) {
+    return 'ollama';
+  }
   return 'anthropic';
 }
 
@@ -157,6 +160,8 @@ export class AIClient {
       yield* this.streamClaudeCode(messages, model, options);
     } else if (provider === 'google') {
       yield* this.streamGemini(messages, model, options);
+    } else if (provider === 'ollama') {
+      yield* this.streamOllama(messages, model, options);
     } else {
       yield* this.streamAnthropic(messages, model, options);
     }
@@ -764,6 +769,219 @@ export class AIClient {
     } catch (err) {
       logger.error({ err, keyId: key.id, model }, 'Gemini API error');
       release(false);
+      throw err;
+    }
+  }
+
+  // --- Ollama (OpenAI-compatible) ---
+
+  private async *streamOllama(
+    messages: ConversationMessage[],
+    model: string,
+    options: StreamOptions,
+  ): AsyncGenerator<AIStreamEvent> {
+    if (options.signal?.aborted) return;
+
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch, options.customSystemPrompt);
+    const systemTokenEstimate = Math.ceil(systemPrompt.length / 4);
+    const trimmed = trimConversation(messages, Math.max(config.MAX_CONTEXT_TOKENS - systemTokenEstimate, 4096));
+
+    // Strip "ollama/" prefix and restore colons (encoded as "--" in Discord choice values)
+    const ollamaModel = model.replace(/^ollama\//, '').replace(/--/g, ':');
+    const baseUrl = config.OLLAMA_BASE_URL;
+
+    logger.debug({ model: ollamaModel, baseUrl, provider: 'ollama' }, 'Starting Ollama stream');
+
+    // Convert messages to OpenAI format
+    const openaiMessages: any[] = [
+      { role: 'system', content: systemPrompt },
+    ];
+
+    for (const m of trimmed) {
+      if (typeof m.content === 'string') {
+        openaiMessages.push({ role: m.role, content: m.content });
+        continue;
+      }
+
+      // Group content blocks into a single OpenAI message per role.
+      // OpenAI format requires all tool_calls in one assistant message,
+      // and each tool_result as a separate "tool" role message.
+      const textParts: string[] = [];
+      const toolCalls: any[] = [];
+      const toolResults: { tool_call_id: string; content: string }[] = [];
+
+      for (const block of m.content) {
+        if (block.type === 'text') {
+          textParts.push(block.text);
+        } else if (block.type === 'tool_use') {
+          toolCalls.push({
+            id: block.id,
+            type: 'function',
+            function: { name: block.name, arguments: JSON.stringify(block.input) },
+          });
+        } else if (block.type === 'tool_result') {
+          toolResults.push({
+            tool_call_id: block.tool_use_id,
+            content: block.content,
+          });
+        }
+      }
+
+      if (m.role === 'assistant') {
+        // Combine text + tool_calls into one assistant message
+        openaiMessages.push({
+          role: 'assistant',
+          content: textParts.join('\n') || null,
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        });
+      } else {
+        // User messages: push text as user message, tool_results as separate tool messages
+        if (textParts.length > 0) {
+          openaiMessages.push({ role: 'user', content: textParts.join('\n') });
+        }
+        for (const tr of toolResults) {
+          openaiMessages.push({
+            role: 'tool',
+            tool_call_id: tr.tool_call_id,
+            content: tr.content,
+          });
+        }
+      }
+    }
+
+    // Build request body
+    const body: any = {
+      model: ollamaModel,
+      messages: openaiMessages,
+      stream: true,
+    };
+
+    if (options.enableTools) {
+      const tools = getActiveTools(options);
+      if (tools.length > 0) {
+        body.tools = toOpenAITools(tools);
+      }
+    }
+
+    try {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: options.signal,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        throw new Error(`Ollama API error ${response.status}: ${errText}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body from Ollama');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let hasToolCalls = false;
+
+      // Accumulate tool calls across chunks (streamed in parts)
+      const pendingToolCalls = new Map<number, { id: string; name: string; args: string }>();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine || trimmedLine === 'data: [DONE]') continue;
+          if (!trimmedLine.startsWith('data: ')) continue;
+
+          let chunk: any;
+          try {
+            chunk = JSON.parse(trimmedLine.slice(6));
+          } catch {
+            continue;
+          }
+
+          const delta = chunk.choices?.[0]?.delta;
+          if (!delta) continue;
+
+          // Text content
+          if (delta.content) {
+            yield { type: 'text', text: delta.content } as TextChunkEvent;
+          }
+
+          // Tool calls (streamed incrementally)
+          if (delta.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index ?? 0;
+              if (!pendingToolCalls.has(idx)) {
+                pendingToolCalls.set(idx, {
+                  id: tc.id || `ollama-${nanoid(12)}`,
+                  name: tc.function?.name || '',
+                  args: '',
+                });
+              }
+              const pending = pendingToolCalls.get(idx)!;
+              if (tc.function?.name) pending.name = tc.function.name;
+              if (tc.function?.arguments) pending.args += tc.function.arguments;
+            }
+          }
+
+          // Check for finish
+          if (chunk.choices?.[0]?.finish_reason === 'tool_calls' || chunk.choices?.[0]?.finish_reason === 'stop') {
+            // Emit any accumulated tool calls
+            for (const [, tc] of pendingToolCalls) {
+              hasToolCalls = true;
+              let input: Record<string, unknown> = {};
+              try {
+                input = JSON.parse(tc.args || '{}');
+              } catch {
+                logger.warn({ args: tc.args }, 'Failed to parse Ollama tool call args');
+              }
+              yield {
+                type: 'tool_use',
+                id: tc.id,
+                name: tc.name,
+                input,
+              } as ToolUseEvent;
+            }
+            pendingToolCalls.clear();
+          }
+        }
+      }
+
+      // Emit any remaining tool calls not yet yielded
+      for (const [, tc] of pendingToolCalls) {
+        hasToolCalls = true;
+        let input: Record<string, unknown> = {};
+        try {
+          input = JSON.parse(tc.args || '{}');
+        } catch {
+          logger.warn({ args: tc.args }, 'Failed to parse Ollama tool call args');
+        }
+        yield {
+          type: 'tool_use',
+          id: tc.id,
+          name: tc.name,
+          input,
+        } as ToolUseEvent;
+      }
+
+      yield { type: 'stop', stopReason: hasToolCalls ? 'tool_use' : 'end_turn' } as StopEvent;
+
+      options.onUsage?.({
+        tokensIn: 0,
+        tokensOut: 0,
+        model: ollamaModel,
+        keyId: 'ollama',
+      });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return;
+      logger.error({ err, model: ollamaModel }, 'Ollama API error');
       throw err;
     }
   }

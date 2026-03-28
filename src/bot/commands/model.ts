@@ -24,6 +24,14 @@ const AVAILABLE_MODELS = [
   { name: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
   { name: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
   { name: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
+  // Ollama (local)
+  { name: 'Qwen 2.5 Coder 32B', value: 'ollama/qwen2.5-coder--32b' },
+  { name: 'Qwen 2.5 Coder 14B', value: 'ollama/qwen2.5-coder--14b' },
+  { name: 'Qwen 2.5 Coder 7B', value: 'ollama/qwen2.5-coder--7b' },
+  { name: 'Qwen3 30B A3B', value: 'ollama/qwen3--30b-a3b' },
+  { name: 'Qwen3 8B', value: 'ollama/qwen3--8b' },
+  { name: 'DeepSeek Coder V2', value: 'ollama/deepseek-coder-v2' },
+  { name: 'Llama 3.1 8B', value: 'ollama/llama3.1--8b' },
 ];
 
 export function createModelCommand(
@@ -32,7 +40,7 @@ export function createModelCommand(
   return {
     data: new SlashCommandBuilder()
       .setName('model')
-      .setDescription('Switch the AI model (Claude or Gemini)')
+      .setDescription('Switch the AI model (Claude, Gemini, or Ollama)')
       .addStringOption((opt) =>
         opt
           .setName('model')
@@ -66,7 +74,9 @@ export function createModelCommand(
         const modelLabel = AVAILABLE_MODELS.find((m) => m.value === model)?.name ?? model;
         const provider = model === 'claude-code' || model.startsWith('claude-code-')
           ? 'Claude Code'
-          : model.startsWith('gemini-') ? 'Google' : 'Anthropic';
+          : model.startsWith('gemini-') ? 'Google'
+          : model.startsWith('ollama/') ? 'Ollama'
+          : 'Anthropic';
 
         if (scope === 'default') {
           config.ANTHROPIC_MODEL = model;

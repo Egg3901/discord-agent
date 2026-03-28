@@ -258,6 +258,25 @@ export const WEB_TOOLS: ToolDefinition[] = [
 ];
 
 /**
+ * Convert Anthropic-format tool definitions to OpenAI-compatible function format.
+ * Used for Ollama and other OpenAI-compatible providers.
+ */
+export function toOpenAITools(tools: ToolDefinition[]) {
+  return tools.map((tool) => ({
+    type: 'function' as const,
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: {
+        type: 'object' as const,
+        properties: tool.input_schema.properties,
+        required: tool.input_schema.required,
+      },
+    },
+  }));
+}
+
+/**
  * Convert Anthropic-format tool definitions to Gemini FunctionDeclaration format.
  */
 export function toGeminiFunctionDeclarations(tools: ToolDefinition[]) {
