@@ -981,6 +981,17 @@ export class AIClient {
       });
     } catch (err: any) {
       if (err?.name === 'AbortError') return;
+      // Provide a clear error when Ollama isn't reachable
+      if (err?.cause?.code === 'ECONNREFUSED' || err?.message?.includes('fetch failed')) {
+        const friendlyErr = new Error(
+          `Cannot connect to Ollama at ${baseUrl}. Ensure Ollama is running (\`ollama serve\`) and the URL is correct. ` +
+          `You can change it with \`/config set OLLAMA_BASE_URL <url>\`.`,
+        );
+        (friendlyErr as any).status = 503;
+        (friendlyErr as any).userMessage = friendlyErr.message;
+        logger.error({ err, model: ollamaModel, baseUrl }, 'Ollama connection failed');
+        throw friendlyErr;
+      }
       logger.error({ err, model: ollamaModel }, 'Ollama API error');
       throw err;
     }
