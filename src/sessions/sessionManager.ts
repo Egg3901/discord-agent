@@ -2,8 +2,8 @@ import { nanoid } from 'nanoid';
 import { logger } from '../utils/logger.js';
 import { SessionLimitError } from '../utils/errors.js';
 import { config } from '../config.js';
-import { getDatabase } from '../storage/database.js';
-import { cleanupSandbox } from '../tools/scriptExecutor.js';
+import { getDatabase, deleteClaudeCodeSession } from '../storage/database.js';
+import { cleanupSandbox, cleanupStaleSandboxes } from '../tools/scriptExecutor.js';
 import type { Session } from './session.js';
 import type { RepoContext } from '../claude/contextBuilder.js';
 import type { ConversationMessage } from '../claude/aiClient.js';
@@ -89,6 +89,7 @@ export class SessionManager {
       this.sessions.delete(threadId);
       this.deleteSessionFromDb(session.id);
       cleanupSandbox(session.id).catch(() => {});
+      deleteClaudeCodeSession(session.id);
       logger.info({ sessionId: session.id, threadId }, 'Session ended');
       return true;
     }
@@ -117,6 +118,7 @@ export class SessionManager {
         this.sessions.delete(threadId);
         this.deleteSessionFromDb(session.id);
         cleanupSandbox(session.id).catch(() => {});
+        deleteClaudeCodeSession(session.id);
         pruned++;
         logger.info({ sessionId: session.id }, 'Stale session pruned');
       } else if (timeLeft <= 5 * 60 * 1000 && !session.warnedAt) {
@@ -125,6 +127,7 @@ export class SessionManager {
         this.onSessionExpiring?.(session);
       }
     }
+    cleanupStaleSandboxes().catch(() => {});
     return pruned;
   }
 
@@ -197,8 +200,16 @@ export class SessionManager {
   }
 
   private persistAll(): void {
-    for (const session of this.sessions.values()) {
-      this.persistSession(session);
+    try {
+      const db = getDatabase();
+      const tx = db.transaction(() => {
+        for (const session of this.sessions.values()) {
+          this.persistSession(session);
+        }
+      });
+      tx();
+    } catch (err) {
+      logger.error({ err }, 'Failed to persist sessions');
     }
   }
 

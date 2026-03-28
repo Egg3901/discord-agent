@@ -118,7 +118,10 @@ class Config {
     // Persist to database so the value survives restarts (lazy import to avoid circular dep)
     import('./storage/database.js')
       .then(({ saveConfigValue }) => saveConfigValue(key, value))
-      .catch(() => {/* Non-fatal: value is still set in memory */});
+      .catch((err) => { /* Non-fatal but log it */
+        // Can't import logger here due to circular deps — use console
+        console.warn('Failed to persist config value:', key, err?.message || err);
+      });
 
     return { success: true };
   }

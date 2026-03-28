@@ -86,6 +86,28 @@ export function handleMessageCreate(
       }
     }
 
+    // Auto-fetch raw GitHub/Gist URLs embedded in the message
+    const urlPattern = /https?:\/\/(?:raw\.githubusercontent\.com|gist\.githubusercontent\.com)\/[^\s)>\]]+/g;
+    const urls = content.match(urlPattern);
+    if (urls && urls.length > 0) {
+      for (const url of urls.slice(0, 3)) { // Max 3 URLs
+        try {
+          const resp = await fetch(url);
+          if (resp.ok) {
+            const text = await resp.text();
+            if (text.length <= 100_000) {
+              const filename = url.split('/').pop() || 'file';
+              content += `\n\n--- ${filename} (from URL) ---\n\`\`\`\n${text}\n\`\`\``;
+            } else {
+              content += `\n\n[URL content too large: ${url}]`;
+            }
+          }
+        } catch {
+          content += `\n\n[Could not fetch: ${url}]`;
+        }
+      }
+    }
+
     try {
       await channel.sendTyping();
 

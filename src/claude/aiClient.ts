@@ -205,10 +205,33 @@ export class AIClient {
       content: m.content as any, // Anthropic SDK accepts string | ContentBlock[]
     }));
 
+    // Add prompt caching to the penultimate user message so all prior context is cached
+    if (anthropicMessages.length >= 3) {
+      // Find the second-to-last user message
+      let count = 0;
+      for (let i = anthropicMessages.length - 1; i >= 0; i--) {
+        if (anthropicMessages[i].role === 'user') {
+          count++;
+          if (count === 2) {
+            const content = anthropicMessages[i].content;
+            if (typeof content === 'string') {
+              anthropicMessages[i].content = [{ type: 'text', text: content, cache_control: { type: 'ephemeral' } }] as any;
+            } else if (Array.isArray(content) && content.length > 0) {
+              const last = content[content.length - 1];
+              (last as any).cache_control = { type: 'ephemeral' };
+            }
+            break;
+          }
+        }
+      }
+    }
+
     // Inject image attachments into the last user message
     if (options.imageAttachments?.length) {
       const lastUser = [...anthropicMessages].reverse().find((m) => m.role === 'user');
-      if (lastUser) {
+      if (!lastUser) {
+        logger.warn('Image attachments provided but no user message found to attach them to');
+      } else if (lastUser) {
         const textContent = typeof lastUser.content === 'string' ? lastUser.content : '';
         const blocks: any[] = [];
         for (const img of options.imageAttachments) {
@@ -517,6 +540,10 @@ export class AIClient {
       for (const line of parts) {
         if (line.trim()) lines.push(line.trim());
       }
+      // Backpressure: pause reading if too much buffered
+      if (lines.length > 100) {
+        proc.stdout!.pause();
+      }
       if (resolveNext) {
         const r = resolveNext;
         resolveNext = null;
@@ -564,6 +591,11 @@ export class AIClient {
         } catch {
           // Not valid JSON, skip
         }
+      }
+
+      // Resume reading if buffer is drained
+      if (lines.length < 50 && proc.stdout && !proc.stdout.destroyed) {
+        proc.stdout.resume();
       }
 
       if (exited) break;

@@ -59,7 +59,8 @@ export function createCodeCommand(
             value: `https://github.com/${r.fullName}`,
           })),
         );
-      } catch {
+      } catch (err) {
+        logger.debug({ err }, 'Code autocomplete failed');
         await interaction.respond([]);
       }
     },

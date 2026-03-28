@@ -213,9 +213,15 @@ export class RepoFetcher {
       recursive: 'true',
     });
 
-    return tree.tree
+    const paths = tree.tree
       .filter((item) => item.type === 'blob' && item.path)
       .map((item) => item.path!);
+
+    if (tree.truncated) {
+      paths.push('[WARNING: Tree was truncated by GitHub — some files may not be listed]');
+    }
+
+    return paths;
   }
 
   /**

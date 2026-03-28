@@ -199,6 +199,30 @@ export async function cleanupSandbox(sessionId: string): Promise<void> {
   }
 }
 
+/**
+ * Clean up stale temporary sandbox directories older than 1 hour.
+ */
+export async function cleanupStaleSandboxes(): Promise<number> {
+  try {
+    const entries = await readdir(SANDBOX_BASE);
+    let cleaned = 0;
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    for (const entry of entries) {
+      if (!entry.startsWith('tmp_')) continue;
+      try {
+        const s = await stat(join(SANDBOX_BASE, entry));
+        if (s.mtimeMs < oneHourAgo) {
+          await rm(join(SANDBOX_BASE, entry), { recursive: true, force: true });
+          cleaned++;
+        }
+      } catch { /* ignore */ }
+    }
+    return cleaned;
+  } catch {
+    return 0;
+  }
+}
+
 function runProcess(cmd: string, args: string[], timeoutMs: number, cwd: string): Promise<ScriptResult> {
   return new Promise((resolve) => {
     let stdout = '';
