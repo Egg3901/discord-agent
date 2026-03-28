@@ -155,6 +155,7 @@ export class SessionManager {
           modelOverride: row.model_override || undefined,
           thinkingEnabled: row.thinking_enabled != null ? !!row.thinking_enabled : null,
           thinkingBudget: row.thinking_budget || null,
+          systemPrompt: row.system_prompt || undefined,
           createdAt: row.created_at,
           lastActiveAt: row.last_active_at,
         };
@@ -174,8 +175,8 @@ export class SessionManager {
       const db = getDatabase();
       db.prepare(`
         INSERT OR REPLACE INTO sessions
-          (id, user_id, thread_id, channel_id, messages, repo_context, model_override, thinking_enabled, thinking_budget, created_at, last_active_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, user_id, thread_id, channel_id, messages, repo_context, model_override, thinking_enabled, thinking_budget, system_prompt, created_at, last_active_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         session.id,
         session.userId,
@@ -186,6 +187,7 @@ export class SessionManager {
         session.modelOverride || null,
         session.thinkingEnabled != null ? (session.thinkingEnabled ? 1 : 0) : null,
         session.thinkingBudget || null,
+        session.systemPrompt || null,
         session.createdAt,
         session.lastActiveAt,
       );

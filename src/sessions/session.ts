@@ -18,6 +18,9 @@ export interface Session {
   thinkingEnabled?: boolean | null;
   thinkingBudget?: number | null;
 
+  // Custom system prompt override (persona)
+  systemPrompt?: string;
+
   // Abort controller for cancelling in-flight requests
   activeController?: AbortController;
 

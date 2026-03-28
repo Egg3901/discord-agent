@@ -6,6 +6,7 @@ import {
 } from 'discord.js';
 import { AIClient } from '../../claude/aiClient.js';
 import { ResponseStreamer } from '../../claude/responseFormatter.js';
+import { SessionManager } from '../../sessions/sessionManager.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { RepoFetcher } from '../../github/repoFetcher.js';
@@ -18,6 +19,7 @@ export function createReviewCommand(
   aiClient: AIClient,
   rateLimiter: RateLimiter,
   repoFetcher: RepoFetcher,
+  sessionManager: SessionManager,
 ): CommandHandler {
   return {
     data: new SlashCommandBuilder()
@@ -49,7 +51,7 @@ export function createReviewCommand(
 
       const prInput = interaction.options.getString('pr', true);
 
-      await interaction.deferReply();
+      await interaction.deferReply({ ephemeral: true });
 
       try {
         const parsed = parsePRInput(prInput);
@@ -72,26 +74,52 @@ export function createReviewCommand(
           return;
         }
 
-        const channel = interaction.channel as TextChannel | ThreadChannel;
-        const thinkingMsg = await interaction.editReply('Reviewing PR...');
+        const channel = interaction.channel;
+        if (!channel || !('threads' in channel)) {
+          await interaction.editReply('This command must be used in a text channel.');
+          return;
+        }
 
-        // Use the interaction's reply as the thinking message anchor
-        const streamer = new ResponseStreamer(channel, thinkingMsg as any);
+        // Create a thread for the review
+        const thread = await (channel as TextChannel).threads.create({
+          name: `\u{1F50D} Review: ${owner}/${repo}#${prNumber}`,
+          autoArchiveDuration: 60,
+          reason: `PR review started by ${interaction.user.tag}`,
+        });
+
+        // Create a session so the user can follow up with questions
+        const session = sessionManager.createSession(
+          interaction.user.id,
+          thread.id,
+          channel.id,
+        );
 
         const reviewPrompt = `You are doing a code review for PR #${prNumber} in ${owner}/${repo}.
 
 ${prContext}
 
 Provide a thorough, actionable code review covering:
-1. **Summary** — what does this PR do?
-2. **Correctness** — logic errors, edge cases, off-by-one errors
-3. **Security** — injection, auth issues, unsafe operations
-4. **Performance** — inefficiencies, unnecessary allocations, N+1 queries
-5. **Code quality** — naming, structure, duplication, readability
-6. **Tests** — missing coverage, weak assertions
-7. **Verdict** — Approve / Request changes / Needs discussion
+1. **Summary** \u2014 what does this PR do?
+2. **Correctness** \u2014 logic errors, edge cases, off-by-one errors
+3. **Security** \u2014 injection, auth issues, unsafe operations
+4. **Performance** \u2014 inefficiencies, unnecessary allocations, N+1 queries
+5. **Code quality** \u2014 naming, structure, duplication, readability
+6. **Tests** \u2014 missing coverage, weak assertions
+7. **Verdict** \u2014 Approve / Request changes / Needs discussion
 
 Be specific: quote the relevant code and explain why it's an issue. Suggest concrete fixes.`;
+
+        sessionManager.addMessage(thread.id, {
+          role: 'user',
+          content: reviewPrompt,
+        });
+
+        await interaction.editReply(
+          `Review started! See the results in <#${thread.id}>`,
+        );
+
+        const thinkingMsg = await thread.send('Reviewing PR...');
+        const streamer = new ResponseStreamer(thread, thinkingMsg);
 
         let fullResponse = '';
         for await (const chunk of aiClient.streamText(
@@ -103,8 +131,7 @@ Be specific: quote the relevant code and explain why it's an issue. Suggest conc
         }
         await streamer.finish();
 
-        // Replace "Reviewing PR..." with the actual first chunk via editReply
-        // streamer handles the rest
+        sessionManager.addMessage(thread.id, { role: 'assistant', content: fullResponse });
       } catch (err) {
         logger.error({ err }, 'Error in /review command');
         await interaction.editReply(formatApiError(err));

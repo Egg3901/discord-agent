@@ -24,9 +24,14 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 > \`/review <pr>\` — Review a GitHub PR (URL or \`owner/repo#123\`)
 > \`/repo <url> [paths]\` — Attach a GitHub repo as context to current session
 > \`/model <model> [scope]\` — Switch Claude model (this session or default)
+> \`/retry\` — Retry the last response (removes it and re-generates)
+> \`/persona set <text>\` — Set a custom system prompt for this session
+> \`/persona clear\` — Remove custom system prompt
 > \`/session end\` — End your current session
 > \`/session status\` — View your active sessions
+> \`/session reset\` — Reset the conversation (clear history, start fresh)
 > \`/sandbox [path]\` — List files in the current session's sandbox workspace
+> \`/status\` — Show current session info (model, repo, thinking, messages)
 > \`/export\` — Export this session conversation as a markdown file
 > \`/usage [period] [all]\` — View your token usage and costs
 > \`/config set <key> <value>\` — Set a runtime config value
@@ -48,6 +53,13 @@ Use \`/code\` to start a threaded coding session. Follow-up messages in the thre
 • When enabled, the bot can run scripts, write/read files, and build multi-file projects in an isolated workspace
 • Supports Python, JavaScript, TypeScript, Bash, Ruby, and Perl
 • Enable with \`/config set ENABLE_SCRIPT_EXECUTION true\`
+
+**Models:**
+> Default: \`claude-code\` (Claude Code CLI, uses Max plan login)
+> Claude Code variants: \`claude-code-sonnet\`, \`claude-code-opus\`, \`claude-code-haiku\`
+> Anthropic API: \`claude-sonnet-4-6\`, \`claude-opus-4-6\`, \`claude-haiku-4-5\` (requires API key)
+> Google: \`gemini-2.5-pro\`, \`gemini-2.5-flash\` (requires Google API key)
+> Switch with \`/model\` — per-session or as default
 
 **Tips:**
 • Attach code files (.ts, .py, .js, etc.) to messages — they're included as context

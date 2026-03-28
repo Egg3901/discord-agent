@@ -90,6 +90,11 @@ function runMigrations(db: Database.Database): void {
     db.exec('ALTER TABLE sessions ADD COLUMN thinking_budget INTEGER');
   }
 
+  // Migration: add system_prompt column to sessions if missing
+  if (!sessionCols.some((c: any) => c.name === 'system_prompt')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN system_prompt TEXT');
+  }
+
   // Migration: claude_code_sessions table for cross-restart CC session continuity
   db.exec(`
     CREATE TABLE IF NOT EXISTS claude_code_sessions (
@@ -215,6 +220,11 @@ export function loadClaudeCodeSessionMap(): Record<string, string> {
     result[row.session_key] = row.cc_session_id;
   }
   return result;
+}
+
+export function deleteClaudeCodeSession(sessionKey: string): void {
+  const db = getDatabase();
+  db.prepare('DELETE FROM claude_code_sessions WHERE session_key = ?').run(sessionKey);
 }
 
 export function closeDatabase(): void {

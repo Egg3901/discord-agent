@@ -90,6 +90,8 @@ export interface StreamOptions {
   imageAttachments?: { mediaType: string; base64Data: string }[];
   /** Session ID — used to isolate the Claude Code subprocess workspace and session continuity */
   sessionId?: string;
+  /** Custom system prompt to prepend (persona) */
+  customSystemPrompt?: string;
 }
 
 /**
@@ -192,7 +194,7 @@ export class AIClient {
     model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch);
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch, options.customSystemPrompt);
     // Reserve token budget for the system prompt so conversation trimming is accurate
     const systemTokenEstimate = Math.ceil(systemPrompt.length / 4);
     const trimmed = trimConversation(messages, Math.max(config.MAX_CONTEXT_TOKENS - systemTokenEstimate, 4096));
@@ -364,6 +366,10 @@ export class AIClient {
 
   /** Map of session thread IDs to Claude Code session IDs for conversation continuity. */
   private claudeCodeSessions = new Map<string, string>();
+
+  clearClaudeCodeSession(sessionKey: string): void {
+    this.claudeCodeSessions.delete(sessionKey);
+  }
 
   private async *streamClaudeCode(
     messages: ConversationMessage[],
@@ -627,7 +633,7 @@ export class AIClient {
     model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch);
+    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch, options.customSystemPrompt);
     const systemTokenEstimate = Math.ceil(systemPrompt.length / 4);
     const trimmed = trimConversation(messages, Math.max(config.MAX_CONTEXT_TOKENS - systemTokenEstimate, 4096));
 

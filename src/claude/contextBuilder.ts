@@ -5,7 +5,7 @@ export interface RepoContext {
   files: { path: string; content: string }[];
 }
 
-export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean, scriptEnabled?: boolean, devToolsEnabled?: boolean, webSearchEnabled?: boolean): string {
+export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean, scriptEnabled?: boolean, devToolsEnabled?: boolean, webSearchEnabled?: boolean, customPrompt?: string): string {
   let prompt = `You are a software engineering assistant on Discord. Write, edit, review, debug, and explain code in any language.
 
 **How responses are displayed — understand this before responding:**
@@ -118,6 +118,10 @@ Rules for web tools:
 
 **Features not available in this session:**
 ${disabledFeatures.map((f) => `- ${f}`).join('\n')}`;
+  }
+
+  if (customPrompt) {
+    prompt = `${customPrompt}\n\n${prompt}`;
   }
 
   if (repoContext) {

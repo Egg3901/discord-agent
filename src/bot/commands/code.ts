@@ -228,6 +228,7 @@ export function createCodeCommand(
           repoContext: session.repoContext,
           modelOverride: session.modelOverride,
           sessionId: session.id,
+          customSystemPrompt: session.systemPrompt,
           onQueuePosition: (pos: number) => {
             thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
           },

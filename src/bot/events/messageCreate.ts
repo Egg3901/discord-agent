@@ -135,6 +135,7 @@ export function handleMessageCreate(
           imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
           enableWebSearch: hasWebSearch,
           sessionId: session.id,
+          customSystemPrompt: session.systemPrompt,
           onQueuePosition: (pos: number) => {
             thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
           },

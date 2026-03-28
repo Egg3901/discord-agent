@@ -22,6 +22,9 @@ import { createSandboxCommand } from './bot/commands/sandbox.js';
 import { createExportCommand } from './bot/commands/export.js';
 import { createReviewCommand } from './bot/commands/review.js';
 import { createImproveCommand } from './bot/commands/improve.js';
+import { createStatusCommand } from './bot/commands/status.js';
+import { createRetryCommand } from './bot/commands/retry.js';
+import { createPersonaCommand } from './bot/commands/persona.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
@@ -48,7 +51,7 @@ async function main() {
 
   // Create commands
   const commands: CommandHandler[] = [
-    createAskCommand(aiClient, rateLimiter),
+    createAskCommand(aiClient, rateLimiter, sessionManager),
     createCodeCommand(sessionManager, aiClient, rateLimiter, repoFetcher),
     createSessionCommand(sessionManager),
     createAdminCommand(keyPool, sessionManager),
@@ -62,8 +65,11 @@ async function main() {
     createCancelCommand(sessionManager),
     createSandboxCommand(sessionManager),
     createExportCommand(sessionManager),
-    createReviewCommand(aiClient, rateLimiter, repoFetcher),
+    createReviewCommand(aiClient, rateLimiter, repoFetcher, sessionManager),
     createImproveCommand(aiClient, rateLimiter),
+    createStatusCommand(sessionManager),
+    createRetryCommand(sessionManager, aiClient, rateLimiter),
+    createPersonaCommand(sessionManager),
   ];
 
   const commandMap = new Map<string, CommandHandler>();

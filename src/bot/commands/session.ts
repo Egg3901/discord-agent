@@ -20,6 +20,9 @@ export function createSessionCommand(
       )
       .addSubcommand((sub) =>
         sub.setName('status').setDescription('View your active sessions'),
+      )
+      .addSubcommand((sub) =>
+        sub.setName('reset').setDescription('Reset the conversation (clear history, start fresh CC session)'),
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
@@ -56,6 +59,34 @@ export function createSessionCommand(
 
           sessionManager.endSession(threadId);
           await interaction.reply('Session ended. This thread is now inactive.');
+        }
+
+        if (subcommand === 'reset') {
+          const threadId = interaction.channelId;
+          const session = sessionManager.getByThread(threadId);
+
+          if (!session) {
+            await interaction.reply({
+              content: 'No active session in this thread.',
+              ephemeral: true,
+            });
+            return;
+          }
+
+          if (session.userId !== interaction.user.id) {
+            await interaction.reply({
+              content: 'You can only reset your own sessions.',
+              ephemeral: true,
+            });
+            return;
+          }
+
+          session.messages = [];
+          // Clear CC session ID so next message starts fresh
+          import('../../storage/database.js').then(({ deleteClaudeCodeSession }) => {
+            deleteClaudeCodeSession(session.id);
+          }).catch(() => {});
+          await interaction.reply({ content: 'Session reset. Conversation history cleared and CC session restarted.', ephemeral: true });
         }
 
         if (subcommand === 'status') {
