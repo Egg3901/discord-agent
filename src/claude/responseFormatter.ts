@@ -17,6 +17,7 @@ export class ResponseStreamer {
   private currentMessage: Message | null = null;
   private lastEditTime = 0;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushing = false;
   private typingTimer: ReturnType<typeof setInterval> | null = null;
   private progressTimer: ReturnType<typeof setInterval> | null = null;
   private dotCount = 0;
@@ -119,6 +120,9 @@ export class ResponseStreamer {
 
   private async flushBuffer(final: boolean): Promise<void> {
     if (this.buffer.length === 0 && !final) return;
+    // Prevent concurrent flushes from racing on buffer/message state
+    if (this.flushing && !final) return;
+    this.flushing = true;
 
     const content = this.buffer;
 
@@ -151,6 +155,7 @@ export class ResponseStreamer {
     }
 
     this.lastEditTime = Date.now();
+    this.flushing = false;
   }
 
   private async editOrSend(content: string): Promise<void> {

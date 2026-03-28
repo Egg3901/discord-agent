@@ -71,6 +71,9 @@ export async function isOllamaReachable(): Promise<boolean> {
   }
 }
 
+/** Track in-flight pulls to deduplicate concurrent requests for the same model. */
+const activePulls = new Map<string, Promise<void>>();
+
 export interface PullProgress {
   status: string;
   completed?: number;
@@ -80,10 +83,38 @@ export interface PullProgress {
 }
 
 /**
+ * Ensure a model is pulled, deduplicating concurrent requests.
+ * Calls onProgress with status updates suitable for Discord messages.
+ */
+export async function ensureModelPulled(
+  modelName: string,
+  onProgress?: (progress: PullProgress) => void,
+): Promise<void> {
+  const existing = activePulls.get(modelName);
+  if (existing) {
+    // Another request is already pulling this model — wait for it
+    return existing;
+  }
+
+  const pullPromise = (async () => {
+    for await (const progress of pullOllamaModel(modelName)) {
+      onProgress?.(progress);
+    }
+  })();
+
+  activePulls.set(modelName, pullPromise);
+  try {
+    await pullPromise;
+  } finally {
+    activePulls.delete(modelName);
+  }
+}
+
+/**
  * Pull (download) an Ollama model, yielding progress events.
  * This streams the pull and yields progress updates suitable for Discord status messages.
  */
-export async function* pullOllamaModel(modelName: string): AsyncGenerator<PullProgress> {
+async function* pullOllamaModel(modelName: string): AsyncGenerator<PullProgress> {
   const baseUrl = config.OLLAMA_BASE_URL;
   logger.info({ model: modelName }, 'Pulling Ollama model');
 

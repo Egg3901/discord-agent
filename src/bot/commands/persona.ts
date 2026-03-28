@@ -48,6 +48,10 @@ export function createPersonaCommand(sessionManager: SessionManager): CommandHan
 
         if (subcommand === 'set') {
           const text = interaction.options.getString('text', true);
+          if (text.length > 4000) {
+            await interaction.reply({ content: `Persona too long (${text.length} chars, max 4000).`, ephemeral: true });
+            return;
+          }
           session.systemPrompt = text;
           await interaction.reply({
             content: `Custom persona set for this session:\n> ${text.slice(0, 200)}${text.length > 200 ? '...' : ''}`,

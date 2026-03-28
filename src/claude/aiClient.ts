@@ -13,7 +13,7 @@ import { buildSystemPrompt, trimConversation, type RepoContext } from './context
 import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations, toOpenAITools } from '../tools/toolDefinitions.js';
 import { getSandboxDir } from '../tools/scriptExecutor.js';
 import { saveClaudeCodeSession, loadClaudeCodeSessionMap } from '../storage/database.js';
-import { isModelAvailable, isOllamaReachable, pullOllamaModel } from './ollamaModels.js';
+import { isModelAvailable, isOllamaReachable, ensureModelPulled } from './ollamaModels.js';
 import type { Provider } from '../keys/types.js';
 
 // --- Content block types (provider-agnostic) ---
@@ -828,13 +828,13 @@ export class AIClient {
       throw err;
     }
 
-    // Auto-pull model if not available locally
+    // Auto-pull model if not available locally (deduplicates concurrent pulls)
     if (!await isModelAvailable(ollamaModel)) {
       options.onStatus?.(`Downloading **${ollamaModel}**... this may take a few minutes.`);
       logger.info({ model: ollamaModel }, 'Ollama model not found locally, pulling');
 
       let lastPercent = -1;
-      for await (const progress of pullOllamaModel(ollamaModel)) {
+      await ensureModelPulled(ollamaModel, (progress) => {
         // Throttle updates to avoid Discord rate limits (only update every 5%)
         if (progress.percent !== null && progress.percent !== lastPercent && progress.percent % 5 === 0) {
           lastPercent = progress.percent;
@@ -843,7 +843,7 @@ export class AIClient {
           // Non-download phases (verifying, writing layers, etc.)
           options.onStatus?.(`Loading **${ollamaModel}**... ${progress.status}`);
         }
-      }
+      });
       options.onStatus?.(`**${ollamaModel}** ready.`);
     }
 
@@ -944,6 +944,7 @@ export class AIClient {
       const pendingToolCalls = new Map<number, { id: string; name: string; args: string }>();
 
       while (true) {
+        if (options.signal?.aborted) break;
         const { done, value } = await reader.read();
         if (done) break;
 

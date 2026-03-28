@@ -100,8 +100,12 @@ export async function runAgentLoop(
       break;
     }
 
-    // Stuck-loop detection: if exact same tool calls as previous iteration, bail
-    const currentToolKey = toolUses.map((t) => `${t.name}:${JSON.stringify(t.input)}`).join('|');
+    // Stuck-loop detection: if exact same tool calls as previous iteration, bail.
+    // Use sorted keys for stable comparison (JSON.stringify key order is non-deterministic).
+    const currentToolKey = toolUses.map((t) => {
+      const sortedInput = Object.keys(t.input).sort().map((k) => `${k}=${JSON.stringify(t.input[k])}`).join(',');
+      return `${t.name}:{${sortedInput}}`;
+    }).join('|');
     if (currentToolKey === previousToolKey) {
       logger.warn({ iteration, toolCalls: toolUses.map((t) => t.name) }, 'Agent loop: repeated tool calls detected, stopping');
       break;

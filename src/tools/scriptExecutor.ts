@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { writeFile, readFile, unlink, mkdir, readdir, stat, rm } from 'node:fs/promises';
-import { join, normalize, resolve, relative, isAbsolute, dirname } from 'node:path';
+import { writeFile, readFile, unlink, mkdir, readdir, stat, rm, realpath } from 'node:fs/promises';
+import { join, normalize, resolve, relative, isAbsolute, dirname, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
@@ -42,12 +42,24 @@ export async function getSandboxDir(sessionId?: string): Promise<string> {
 
 /**
  * Validate that a path stays within the sandbox.
+ * Checks both the logical path and resolves symlinks to prevent escapes.
  */
-function safePath(sandboxDir: string, userPath: string): string | null {
+async function safePath(sandboxDir: string, userPath: string): Promise<string | null> {
   const resolved = resolve(sandboxDir, normalize(userPath));
   const rel = relative(sandboxDir, resolved);
   if (rel.startsWith('..') || isAbsolute(rel)) {
     return null;
+  }
+  // If the target already exists, resolve symlinks and re-check containment.
+  // This prevents a symlink inside the sandbox pointing outside it.
+  try {
+    const real = await realpath(resolved);
+    const realSandbox = await realpath(sandboxDir);
+    if (!real.startsWith(realSandbox + sep) && real !== realSandbox) {
+      return null;
+    }
+  } catch {
+    // File doesn't exist yet (write_file) — logical check above is sufficient
   }
   return resolved;
 }
@@ -108,7 +120,7 @@ export async function sandboxWriteFile(
     return 'Error: Script execution is disabled.';
   }
 
-  const resolved = safePath(sandboxDir, path);
+  const resolved = await safePath(sandboxDir, path);
   if (!resolved) {
     return 'Error: Path escapes the sandbox directory.';
   }
@@ -137,7 +149,7 @@ export async function sandboxReadFile(
     return 'Error: Script execution is disabled.';
   }
 
-  const resolved = safePath(sandboxDir, path);
+  const resolved = await safePath(sandboxDir, path);
   if (!resolved) {
     return 'Error: Path escapes the sandbox directory.';
   }
@@ -165,7 +177,7 @@ export async function sandboxListFiles(
     return 'Error: Script execution is disabled.';
   }
 
-  const resolved = safePath(sandboxDir, path || '.');
+  const resolved = await safePath(sandboxDir, path || '.');
   if (!resolved) {
     return 'Error: Path escapes the sandbox directory.';
   }

@@ -40,7 +40,7 @@ export function createCancelCommand(
           return;
         }
 
-        session.activeController.abort();
+        session.activeController?.abort();
         session.activeController = undefined;
         await interaction.reply({ content: 'Cancelled.', ephemeral: true });
       } catch (err) {
