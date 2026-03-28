@@ -1,11 +1,13 @@
-import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
+import { SlashCommandBuilder, type ChatInputCommandInteraction, type TextChannel } from 'discord.js';
 import type { AIClient, UsageInfo } from '../../claude/aiClient.js';
+import { getProviderForModel } from '../../claude/aiClient.js';
+import { ResponseStreamer } from '../../claude/responseFormatter.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { formatApiError } from '../../utils/errors.js';
 import { isAllowed } from '../middleware/permissions.js';
-import { splitMessage } from '../../utils/chunks.js';
 import { logUsage } from '../../storage/database.js';
 import { logger } from '../../utils/logger.js';
+import { config } from '../../config.js';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
 
@@ -45,10 +47,18 @@ export function createAskCommand(
 
       await interaction.deferReply();
 
+      const thinkingMsg = await interaction.editReply('Thinking...');
+      const channel = interaction.channel;
+      if (!channel) {
+        await interaction.editReply('This command must be used in a channel.');
+        return;
+      }
+
+      const streamer = new ResponseStreamer(channel as TextChannel, thinkingMsg as any);
+
       try {
-        const response = await aiClient.getResponse([
-          { role: 'user', content: question },
-        ], {
+        const isCC = getProviderForModel(config.ANTHROPIC_MODEL) === 'claude-code';
+        const usageHandler = {
           onUsage: (usage: UsageInfo) => {
             logUsage({
               userId: interaction.user.id,
@@ -59,17 +69,25 @@ export function createAskCommand(
               costUsd: usage.costUsd,
             });
           },
-        });
+        };
 
-        const chunks = splitMessage(response);
-        await interaction.editReply(chunks[0]);
-
-        for (let i = 1; i < chunks.length; i++) {
-          await interaction.followUp(chunks[i]);
+        if (isCC) {
+          for await (const event of aiClient.streamResponse([{ role: 'user', content: question }], usageHandler)) {
+            if (event.type === 'text') {
+              await streamer.push(event.text);
+            } else if (event.type === 'tool_use') {
+              await channel.send(`> \u{1F527} \`${event.name}\``);
+            }
+          }
+        } else {
+          for await (const chunk of aiClient.streamText([{ role: 'user', content: question }], usageHandler)) {
+            await streamer.push(chunk);
+          }
         }
+        await streamer.finish();
       } catch (err) {
         logger.error({ err }, 'Error in /ask command');
-        await interaction.editReply(formatApiError(err));
+        await streamer.sendError(formatApiError(err));
       }
     },
   };

@@ -20,4 +20,7 @@ export interface Session {
 
   // Abort controller for cancelling in-flight requests
   activeController?: AbortController;
+
+  // Timestamp when the user was warned about impending session expiry
+  warnedAt?: number;
 }

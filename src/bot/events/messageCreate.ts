@@ -157,13 +157,19 @@ export function handleMessageCreate(
               fullResponse += event.text;
               await streamer.push(event.text);
             } else if (event.type === 'tool_use') {
+              // Mark previous tool as done when a new one starts
+              if (lastToolMsg) {
+                await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
+              }
               toolCallCount++;
               const detail = formatCCToolDetail(event.name, event.input);
               lastToolMsg = await channel.send(`> \u{1F527} \`${event.name}\`${detail ? ` ${detail}` : ''}`);
-            } else if (event.type === 'stop' && lastToolMsg) {
-              await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
-              lastToolMsg = null;
             }
+          }
+          // Mark the last tool as done
+          if (lastToolMsg) {
+            await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
+            lastToolMsg = null;
           }
           clearInterval(thinkingTimer);
           await streamer.finish();

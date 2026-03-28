@@ -4,6 +4,7 @@ import { createDiscordClient } from './bot/client.js';
 import { handleReady } from './bot/events/ready.js';
 import { handleInteractionCreate } from './bot/events/interactionCreate.js';
 import { handleMessageCreate } from './bot/events/messageCreate.js';
+import { handleReactionAdd } from './bot/events/reactionAdd.js';
 import { registerCommands } from './bot/commands/registry.js';
 import { createAskCommand } from './bot/commands/ask.js';
 import { createCodeCommand } from './bot/commands/code.js';
@@ -80,9 +81,18 @@ async function main() {
   handleReady(client);
   handleInteractionCreate(client, commandMap);
   handleMessageCreate(client, sessionManager, aiClient, rateLimiter, repoFetcher);
+  handleReactionAdd(client, sessionManager);
 
   // Login
   await client.login(config.DISCORD_TOKEN);
+
+  // Warn users when their session is about to expire
+  sessionManager.setExpiryCallback((session) => {
+    const channel = client.channels.cache.get(session.threadId);
+    if (channel && 'send' in channel) {
+      (channel as any).send('⚠️ This session will expire in ~5 minutes due to inactivity. Send a message to keep it alive.').catch(() => {});
+    }
+  });
 
   // Graceful shutdown
   const shutdown = () => {

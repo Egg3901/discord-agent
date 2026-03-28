@@ -143,6 +143,23 @@ export function createCodeCommand(
           reason: `Coding session started by ${interaction.user.tag}`,
         });
 
+        // Fire-and-forget: generate a better thread name from the prompt
+        (async () => {
+          try {
+            const effectiveModel = config.ANTHROPIC_MODEL;
+            // Skip AI naming for CC to avoid subprocess overhead
+            if (getProviderForModel(effectiveModel) === 'claude-code') return;
+            const title = await aiClient.getResponse(
+              [{ role: 'user', content: `Generate a short 4-6 word title for this coding task. Return ONLY the title, no quotes:\n\n${prompt.slice(0, 200)}` }],
+              {},
+            );
+            const cleaned = title.trim().slice(0, 90);
+            if (cleaned && cleaned.length > 2) {
+              await thread.setName(`🤖 ${cleaned}`);
+            }
+          } catch { /* non-fatal */ }
+        })();
+
         // Parse repo if provided
         let repoOwner: string | undefined;
         let repoName: string | undefined;
@@ -247,14 +264,19 @@ export function createCodeCommand(
                 fullResponse += event.text;
                 await streamer.push(event.text);
               } else if (event.type === 'tool_use') {
+                // Mark previous tool as done when a new one starts
+                if (lastToolMsg) {
+                  await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
+                }
                 toolCallCount++;
                 const detail = formatCCToolDetail(event.name, event.input);
                 lastToolMsg = await thread.send(`> \u{1F527} \`${event.name}\`${detail ? ` ${detail}` : ''}`);
-              } else if (event.type === 'stop' && lastToolMsg) {
-                // Append a checkmark to the last tool message when a stop arrives
-                await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
-                lastToolMsg = null;
               }
+            }
+            // Mark the last tool as done
+            if (lastToolMsg) {
+              await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
+              lastToolMsg = null;
             }
             clearInterval(thinkingTimer);
             await streamer.finish();

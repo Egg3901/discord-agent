@@ -16,11 +16,16 @@ export class SessionManager {
   private sessions: Map<string, Session> = new Map(); // threadId -> Session
   private pruneTimer: ReturnType<typeof setInterval>;
   private persistTimer: ReturnType<typeof setInterval>;
+  private onSessionExpiring?: (session: Session) => void;
 
   constructor() {
     this.loadFromDatabase();
     this.pruneTimer = setInterval(() => this.pruneStale(), 5 * 60 * 1000);
     this.persistTimer = setInterval(() => this.persistAll(), PERSIST_INTERVAL_MS);
+  }
+
+  setExpiryCallback(cb: (session: Session) => void) {
+    this.onSessionExpiring = cb;
   }
 
   createSession(
@@ -106,12 +111,18 @@ export class SessionManager {
     const now = Date.now();
     let pruned = 0;
     for (const [threadId, session] of this.sessions) {
-      if (now - session.lastActiveAt > STALE_SESSION_MS) {
+      const timeLeft = STALE_SESSION_MS - (now - session.lastActiveAt);
+      if (timeLeft <= 0) {
+        // Actually expired
         this.sessions.delete(threadId);
         this.deleteSessionFromDb(session.id);
         cleanupSandbox(session.id).catch(() => {});
         pruned++;
         logger.info({ sessionId: session.id }, 'Stale session pruned');
+      } else if (timeLeft <= 5 * 60 * 1000 && !session.warnedAt) {
+        // Within 5 minutes of expiry — warn once
+        session.warnedAt = now;
+        this.onSessionExpiring?.(session);
       }
     }
     return pruned;
