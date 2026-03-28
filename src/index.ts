@@ -100,9 +100,40 @@ async function main() {
     }
   });
 
+  // Periodic disk cleanup (every 30 min): stale sandboxes + PM2 log rotation
+  const diskCleanup = async () => {
+    try {
+      const { cleanupStaleSandboxes } = await import('./tools/scriptExecutor.js');
+      const cleaned = await cleanupStaleSandboxes();
+      if (cleaned > 0) logger.info({ cleaned }, 'Cleaned stale sandbox directories');
+    } catch { /* non-fatal */ }
+
+    // Truncate PM2 logs if they exceed 50MB
+    try {
+      const { stat, truncate } = await import('node:fs/promises');
+      const logDir = process.env['PM2_HOME']
+        ? `${process.env['PM2_HOME']}/logs`
+        : `${process.env['HOME'] || '/root'}/.pm2/logs`;
+      const { readdir } = await import('node:fs/promises');
+      const files = await readdir(logDir).catch(() => [] as string[]);
+      for (const f of files) {
+        if (!f.endsWith('.log')) continue;
+        const path = `${logDir}/${f}`;
+        const s = await stat(path).catch(() => null);
+        if (s && s.size > 50_000_000) {
+          await truncate(path, 0);
+          logger.info({ file: f, wasBytes: s.size }, 'Truncated oversized PM2 log');
+        }
+      }
+    } catch { /* non-fatal */ }
+  };
+  diskCleanup(); // Run once at startup
+  const cleanupTimer = setInterval(diskCleanup, 30 * 60 * 1000);
+
   // Graceful shutdown
   const shutdown = () => {
     logger.info('Shutting down...');
+    clearInterval(cleanupTimer);
     keyPool.destroy();
     sessionManager.destroy();
     rateLimiter.destroy();

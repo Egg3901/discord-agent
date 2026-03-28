@@ -213,7 +213,8 @@ export async function cleanupSandbox(sessionId: string): Promise<void> {
 }
 
 /**
- * Clean up stale temporary sandbox directories older than 1 hour.
+ * Clean up stale sandbox directories older than 1 hour.
+ * Covers both tmp_ (anonymous) and session_ (expired session) directories.
  */
 export async function cleanupStaleSandboxes(): Promise<number> {
   try {
@@ -221,7 +222,7 @@ export async function cleanupStaleSandboxes(): Promise<number> {
     let cleaned = 0;
     const oneHourAgo = Date.now() - 60 * 60 * 1000;
     for (const entry of entries) {
-      if (!entry.startsWith('tmp_')) continue;
+      if (!entry.startsWith('tmp_') && !entry.startsWith('session_')) continue;
       try {
         const s = await stat(join(SANDBOX_BASE, entry));
         if (s.mtimeMs < oneHourAgo) {
