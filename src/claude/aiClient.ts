@@ -681,6 +681,12 @@ export class AIClient {
       }
 
       case 'result':
+        // Surface errors from CC (e.g. auth failure, invalid session, CLI crash)
+        if (msg.is_error || msg.subtype === 'error') {
+          const errText = msg.error || msg.result || 'Unknown Claude Code error';
+          logger.error({ ccError: errText, sessionKey }, 'Claude Code returned an error result');
+          return [{ type: 'text', text: `Something went wrong: ${errText}` } as TextChunkEvent];
+        }
         // The result event contains the final combined text, but we already
         // streamed it via assistant messages, so skip to avoid duplication.
         return [];

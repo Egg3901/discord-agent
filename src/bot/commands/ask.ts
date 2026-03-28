@@ -9,6 +9,7 @@ import { isAllowed } from '../middleware/permissions.js';
 import { logUsage } from '../../storage/database.js';
 import { logger } from '../../utils/logger.js';
 import { config } from '../../config.js';
+import { nanoid } from 'nanoid';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
 
@@ -111,7 +112,7 @@ export function createAskCommand(
             let fullResponse = '';
 
             if (isCC) {
-              for await (const event of aiClient.streamResponse([{ role: 'user', content: question }], usageHandler)) {
+              for await (const event of aiClient.streamResponse([{ role: 'user', content: question }], { ...usageHandler, sessionId: session.id })) {
                 if (event.type === 'text') {
                   fullResponse += event.text;
                   await streamer.push(event.text);
@@ -146,7 +147,7 @@ export function createAskCommand(
           const isCC = getProviderForModel(config.ANTHROPIC_MODEL) === 'claude-code';
 
           if (isCC) {
-            for await (const event of aiClient.streamResponse([{ role: 'user', content: question }], usageHandler)) {
+            for await (const event of aiClient.streamResponse([{ role: 'user', content: question }], { ...usageHandler, sessionId: `ask_${nanoid(8)}` })) {
               if (event.type === 'text') {
                 await streamer.push(event.text);
               } else if (event.type === 'tool_use') {
