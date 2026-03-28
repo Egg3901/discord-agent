@@ -123,8 +123,9 @@ export function createCodeCommand(
           await interaction.editReply({ content: preview, components: [row] });
 
           try {
-            const btn = await interaction.awaitMessageComponent({
-              filter: (i) => i.user.id === interaction.user.id,
+            const reply = await interaction.fetchReply();
+            const btn = await reply.awaitMessageComponent({
+              filter: (i: { user: { id: string } }) => i.user.id === interaction.user.id,
               time: 30_000,
               componentType: ComponentType.Button,
             });

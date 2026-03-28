@@ -150,7 +150,7 @@ export function createAskCommand(
               if (event.type === 'text') {
                 await streamer.push(event.text);
               } else if (event.type === 'tool_use') {
-                await channel.send(`> \u{1F527} \`${event.name}\``);
+                await (channel as TextChannel).send(`> \u{1F527} \`${event.name}\``);
               }
             }
           } else {
