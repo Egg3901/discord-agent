@@ -16,6 +16,8 @@ const WEB_TOOL_NAMES = new Set(['web_search', 'web_fetch']);
 export class ToolExecutor {
   private sandboxDir: string | null = null;
   private devExecutor: DevToolExecutor | null = null;
+  /** Cached repo tree to avoid re-fetching on every search_files call within one agent loop */
+  private treeCache: string[] | null = null;
 
   constructor(
     private repoFetcher: RepoFetcher | null,
@@ -218,7 +220,10 @@ export class ToolExecutor {
   }
 
   private async searchFiles(pattern: string): Promise<string> {
-    const allFiles = await this.repoFetcher!.getTree(this.owner, this.repo);
+    if (!this.treeCache) {
+      this.treeCache = await this.repoFetcher!.getTree(this.owner, this.repo);
+    }
+    const allFiles = this.treeCache;
     const regex = globToRegex(pattern);
     const matches = allFiles.filter((p) => regex.test(p));
     if (matches.length === 0) {

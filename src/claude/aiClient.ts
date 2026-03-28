@@ -665,6 +665,9 @@ export class AIClient {
     model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
+    // Check abort signal before starting
+    if (options.signal?.aborted) return;
+
     const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch, options.customSystemPrompt);
     const systemTokenEstimate = Math.ceil(systemPrompt.length / 4);
     const trimmed = trimConversation(messages, Math.max(config.MAX_CONTEXT_TOKENS - systemTokenEstimate, 4096));
@@ -677,6 +680,20 @@ export class AIClient {
 
       // Convert messages to Gemini format with proper function call/result parts
       const geminiContents = toGeminiContents(trimmed);
+
+      // Inject image attachments into the last user message
+      if (options.imageAttachments?.length) {
+        for (let i = geminiContents.length - 1; i >= 0; i--) {
+          if (geminiContents[i].role === 'user') {
+            for (const img of options.imageAttachments) {
+              geminiContents[i].parts.unshift({
+                inlineData: { mimeType: img.mediaType, data: img.base64Data },
+              });
+            }
+            break;
+          }
+        }
+      }
 
       const geminiConfig: Record<string, any> = {
         systemInstruction: systemPrompt,
@@ -710,6 +727,11 @@ export class AIClient {
 
       let hasToolCalls = false;
       for await (const chunk of response) {
+        // Check abort signal during streaming
+        if (options.signal?.aborted) {
+          release(true);
+          return;
+        }
         // Gemini may return function calls
         const parts = (chunk as any).candidates?.[0]?.content?.parts || [];
         for (const part of parts) {
