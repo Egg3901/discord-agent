@@ -11,17 +11,25 @@ const MAX_FILE_SIZE = 100_000; // 100KB per file
 const MAX_TOTAL_FILES = 20;
 
 export class RepoFetcher {
+  private _octokit: Octokit | null = null;
+  private _octokitToken: string | null = null;
+
   /**
-   * Returns an Octokit instance using the current GITHUB_TOKEN from config.
-   * Re-reads on every call so runtime token changes (via /admin or /config) take effect.
+   * Returns a cached Octokit instance using the current GITHUB_TOKEN from config.
+   * Invalidated automatically when the token changes at runtime.
    */
   private get octokit(): Octokit {
-    return new Octokit({
-      auth: config.GITHUB_TOKEN || undefined,
-      request: {
-        timeout: 15_000, // 15 second timeout per request
-      },
-    });
+    const currentToken = config.GITHUB_TOKEN || null;
+    if (!this._octokit || this._octokitToken !== currentToken) {
+      this._octokit = new Octokit({
+        auth: currentToken || undefined,
+        request: {
+          timeout: 15_000,
+        },
+      });
+      this._octokitToken = currentToken;
+    }
+    return this._octokit;
   }
 
   parseGitHubUrl(url: string): { owner: string; repo: string } {

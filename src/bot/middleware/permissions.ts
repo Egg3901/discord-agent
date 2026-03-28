@@ -25,12 +25,26 @@ export function isAllowed(member: GuildMember | null): boolean {
   return member.roles.cache.some((role) => allowedRoles.includes(role.id));
 }
 
-// --- Role management (stored in SQLite) ---
+// --- Role management (stored in SQLite, cached in memory) ---
+
+let cachedRoles: string[] | null = null;
+let cacheExpiry = 0;
+const CACHE_TTL_MS = 30_000; // 30 seconds
 
 export function getAllowedRoles(): string[] {
+  const now = Date.now();
+  if (cachedRoles && now < cacheExpiry) return cachedRoles;
   const db = getDatabase();
   const rows = db.prepare('SELECT role_id FROM allowed_roles').all() as { role_id: string }[];
-  return rows.map((r) => r.role_id);
+  cachedRoles = rows.map((r) => r.role_id);
+  cacheExpiry = now + CACHE_TTL_MS;
+  return cachedRoles;
+}
+
+/** Invalidate the role cache (called after add/remove). */
+function invalidateRoleCache(): void {
+  cachedRoles = null;
+  cacheExpiry = 0;
 }
 
 export function addAllowedRole(roleId: string, roleName: string): void {
@@ -38,11 +52,13 @@ export function addAllowedRole(roleId: string, roleName: string): void {
   db.prepare(
     'INSERT OR REPLACE INTO allowed_roles (role_id, role_name, added_at) VALUES (?, ?, ?)',
   ).run(roleId, roleName, Date.now());
+  invalidateRoleCache();
 }
 
 export function removeAllowedRole(roleId: string): boolean {
   const db = getDatabase();
   const result = db.prepare('DELETE FROM allowed_roles WHERE role_id = ?').run(roleId);
+  invalidateRoleCache();
   return result.changes > 0;
 }
 

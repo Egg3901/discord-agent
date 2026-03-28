@@ -1,11 +1,12 @@
 import { spawn } from 'node:child_process';
 import { writeFile, readFile, unlink, mkdir, readdir, stat, rm } from 'node:fs/promises';
 import { join, normalize, resolve, relative, isAbsolute, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
-const SANDBOX_BASE = '/tmp/discord-agent-sandbox';
+const SANDBOX_BASE = join(tmpdir(), 'discord-agent-sandbox');
 const MAX_OUTPUT = 10_000; // 10KB max output
 const MAX_FILE_SIZE = 100_000; // 100KB max file read
 const MAX_FILES_PER_SESSION = 50;

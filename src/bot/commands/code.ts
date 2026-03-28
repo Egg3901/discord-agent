@@ -22,6 +22,7 @@ import { RepoFetcher } from '../../github/repoFetcher.js';
 import { ToolExecutor } from '../../tools/toolExecutor.js';
 import { runAgentLoop } from '../../claude/agentLoop.js';
 import { config } from '../../config.js';
+import { TOOL_EMOJIS, TOOL_LABELS, formatToolDetail, formatCCToolDetail } from '../../utils/toolDisplay.js';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
 
@@ -305,10 +306,10 @@ export function createCodeCommand(
               {
                 onTextChunk: (text) => streamer.push(text),
                 onToolStart: async (name, input) => {
-                  const inputSummary = Object.entries(input)
-                    .map(([k, v]) => `${k}: ${String(v).slice(0, 80)}`)
-                    .join(', ');
-                  lastToolMsg = await thread.send(`> \u{1F527} \`${name}\` ${inputSummary}`);
+                  const emoji = TOOL_EMOJIS[name] || '\u{1F527}';
+                  const label = TOOL_LABELS[name] || name;
+                  const detail = formatToolDetail(name, input);
+                  lastToolMsg = await thread.send(`> ${emoji} ${label}${detail ? ` ${detail}` : ''}`);
                 },
                 onToolEnd: async (_name, toolResult) => {
                   if (!lastToolMsg) return;
@@ -319,6 +320,10 @@ export function createCodeCommand(
                   lastToolMsg = null;
                 },
                 onThinking: async () => {},
+                onProgress: async (_iter, tools, elapsed) => {
+                  const secs = Math.round(elapsed / 1000);
+                  thinkingMsg.edit(`Working... (${tools} tool call${tools !== 1 ? 's' : ''}, ${secs}s)`).catch(() => {});
+                },
               },
             );
             clearInterval(thinkingTimer);
@@ -357,37 +362,4 @@ export function createCodeCommand(
   };
 }
 
-/**
- * Format a short detail string for a Claude Code internal tool call notification.
- * CC uses its own tool names (Bash, Read, Write, Glob, Grep, WebFetch, etc.)
- */
-function formatCCToolDetail(name: string, input: Record<string, unknown>): string {
-  const n = name.toLowerCase();
-  if (n === 'bash' || n === 'runterminal') {
-    const cmd = input.command || input.cmd;
-    return cmd ? `\`${String(cmd).slice(0, 80)}\`` : '';
-  }
-  if (n === 'read' || n === 'write' || n === 'edit' || n === 'multiedit') {
-    const path = input.file_path || input.path;
-    return path ? `\`${String(path)}\`` : '';
-  }
-  if (n === 'glob') {
-    const pattern = input.pattern;
-    return pattern ? `\`${String(pattern)}\`` : '';
-  }
-  if (n === 'grep') {
-    const pattern = input.pattern || input.query;
-    return pattern ? `for \`${String(pattern).slice(0, 60)}\`` : '';
-  }
-  if (n === 'webfetch' || n === 'web_fetch') {
-    const url = input.url;
-    return url ? `\`${String(url).slice(0, 80)}\`` : '';
-  }
-  if (n === 'websearch' || n === 'web_search') {
-    const query = input.query;
-    return query ? `\`${String(query).slice(0, 60)}\`` : '';
-  }
-  // Generic fallback: show first key-value pair
-  const first = Object.entries(input)[0];
-  return first ? `${first[0]}: \`${String(first[1]).slice(0, 60)}\`` : '';
-}
+// formatCCToolDetail imported from ../../utils/toolDisplay.js
