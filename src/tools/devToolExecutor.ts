@@ -22,6 +22,9 @@ const BLOCKED_PATTERNS = [
 /** Shell metacharacters that could allow command injection when interpolated into bash -c. */
 const SHELL_INJECTION_CHARS = /[;|&`$(){}!<>\n\r]/;
 
+/** Cached GitHub user identity resolved from GITHUB_TOKEN. */
+let cachedGitHubUser: { name: string; email: string } | null = null;
+
 /** All git tool names for routing. */
 export const GIT_TOOL_NAMES = new Set([
   'git_status', 'git_diff', 'git_log', 'git_add', 'git_commit',
@@ -167,7 +170,7 @@ export class DevToolExecutor {
     const { env: extraEnv, cleanup } = await this.getGitCredentialEnv();
 
     // Set git author/committer identity
-    const { name: gitName, email: gitEmail } = this.getGitIdentity();
+    const { name: gitName, email: gitEmail } = await this.getGitIdentity();
     extraEnv['GIT_AUTHOR_NAME'] = gitName;
     extraEnv['GIT_COMMITTER_NAME'] = gitName;
     extraEnv['GIT_AUTHOR_EMAIL'] = gitEmail;
@@ -181,32 +184,35 @@ export class DevToolExecutor {
   }
 
   /**
-   * Determine git author name/email for commits.
-   * Priority: explicit config > auto-derived from active model.
+   * Resolve git author identity from GITHUB_TOKEN.
+   * Calls GET /user once and caches the result for the process lifetime.
    */
-  private getGitIdentity(): { name: string; email: string } {
-    if (config.GIT_AUTHOR_NAME && config.GIT_AUTHOR_EMAIL) {
-      return { name: config.GIT_AUTHOR_NAME, email: config.GIT_AUTHOR_EMAIL };
+  private async getGitIdentity(): Promise<{ name: string; email: string }> {
+    if (cachedGitHubUser) return cachedGitHubUser;
+
+    if (config.GITHUB_TOKEN) {
+      try {
+        const res = await fetch('https://api.github.com/user', {
+          headers: {
+            Authorization: `Bearer ${config.GITHUB_TOKEN}`,
+            Accept: 'application/vnd.github+json',
+          },
+        });
+        if (res.ok) {
+          const user = await res.json() as { login: string; name: string | null; id: number };
+          cachedGitHubUser = {
+            name: user.name || user.login,
+            email: `${user.id}+${user.login}@users.noreply.github.com`,
+          };
+          logger.info(`Git identity resolved from GitHub token: ${cachedGitHubUser.name} <${cachedGitHubUser.email}>`);
+          return cachedGitHubUser;
+        }
+      } catch {
+        // Network error — fall through to default
+      }
     }
 
-    const model = config.ANTHROPIC_MODEL;
-
-    let name: string;
-    if (model === 'claude-code' || model.startsWith('claude-code-') || model.startsWith('claude-')) {
-      name = 'Claude';
-    } else if (model.startsWith('ollama/')) {
-      // e.g. "ollama/llama3:8b" -> "Ollama (llama3:8b)"
-      name = `Ollama (${model.replace(/^ollama\//, '')})`;
-    } else if (model.startsWith('gemini-')) {
-      name = 'Gemini';
-    } else {
-      name = 'AI Assistant';
-    }
-
-    return {
-      name: config.GIT_AUTHOR_NAME || name,
-      email: config.GIT_AUTHOR_EMAIL || 'noreply@users.noreply.github.com',
-    };
+    return { name: 'AI Assistant', email: 'noreply@users.noreply.github.com' };
   }
 
   private async buildProject(input: Record<string, unknown>): Promise<string> {
