@@ -185,10 +185,17 @@ export function handleMessageCreate(
           const loopStart = Date.now();
           let fullResponse = '';
           let toolCallCount = 0;
+          let detached = false;
           let lastToolMsg: import('discord.js').Message | null = null;
           for await (const event of aiClient.streamResponse(session.messages, baseStreamOptions)) {
             if (controller.signal.aborted) break;
             if (event.type === 'text') {
+              // If tools were used, detach so the response appears as a new message
+              if (toolCallCount > 0 && !detached) {
+                detached = true;
+                clearInterval(thinkingTimer);
+                await streamer.detachForNewMessage(`*Used ${toolCallCount} tool(s)*`);
+              }
               fullResponse += event.text;
               await streamer.push(event.text);
             } else if (event.type === 'tool_use') {
@@ -220,8 +227,11 @@ export function handleMessageCreate(
             session.repoOwner || '',
             session.repoName || '',
             session.id,
+            session.repoContext?.repoUrl,
           );
           let lastToolMsg: import('discord.js').Message | null = null;
+          let agentToolCount = 0;
+          let agentDetached = false;
           const loopStart = Date.now();
           const result = await runAgentLoop(
             aiClient,
@@ -229,8 +239,17 @@ export function handleMessageCreate(
             toolExecutor,
             { ...baseStreamOptions, enableRepoTools: !!hasRepo },
             {
-              onTextChunk: (text) => streamer.push(text),
+              onTextChunk: async (text) => {
+                // If tools were used, detach so the final response is a new message
+                if (agentToolCount > 0 && !agentDetached) {
+                  agentDetached = true;
+                  clearInterval(thinkingTimer);
+                  await streamer.detachForNewMessage(`*Used ${agentToolCount} tool(s)*`);
+                }
+                await streamer.push(text);
+              },
               onToolStart: async (name, input) => {
+                agentToolCount++;
                 const emoji = TOOL_EMOJIS[name] || '\u{1F527}';
                 const label = TOOL_LABELS[name] || name;
                 const detail = formatToolDetail(name, input);

@@ -1,6 +1,6 @@
 import { RepoFetcher } from '../github/repoFetcher.js';
 import { executeScript, sandboxWriteFile, sandboxReadFile, sandboxListFiles, getSandboxDir } from './scriptExecutor.js';
-import { DevToolExecutor } from './devToolExecutor.js';
+import { DevToolExecutor, GIT_TOOL_NAMES, ensureGitWorkspace } from './devToolExecutor.js';
 import { webSearch, webFetch } from './webSearchExecutor.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -10,7 +10,7 @@ const MAX_PATH_LENGTH = 500;
 const MAX_QUERY_LENGTH = 200;
 const MAX_SCRIPT_LENGTH = 50_000;
 
-const DEV_TOOL_NAMES = new Set(['run_terminal', 'git_command', 'build_project']);
+const DEV_TOOL_NAMES = new Set(['run_terminal', 'build_project', ...GIT_TOOL_NAMES]);
 const WEB_TOOL_NAMES = new Set(['web_search', 'web_fetch']);
 
 export class ToolExecutor {
@@ -18,20 +18,30 @@ export class ToolExecutor {
   private devExecutor: DevToolExecutor | null = null;
   /** Cached repo tree to avoid re-fetching on every search_files call within one agent loop */
   private treeCache: string[] | null = null;
+  private gitWorkspaceReady = false;
 
   constructor(
     private repoFetcher: RepoFetcher | null,
     private owner: string,
     private repo: string,
     private sessionId?: string,
+    private repoUrl?: string,
   ) {}
 
   /**
    * Get or lazily create the sandbox directory for this session.
+   * If a repo URL is attached and dev tools are enabled, ensures the
+   * workspace is a valid git repo (clone if new, pull if existing).
    */
   private async getSandbox(): Promise<string> {
     if (!this.sandboxDir) {
       this.sandboxDir = await getSandboxDir(this.sessionId);
+    }
+    // Ensure git workspace is set up on first access when we have a repo
+    if (!this.gitWorkspaceReady && this.repoUrl && config.ENABLE_DEV_TOOLS) {
+      this.gitWorkspaceReady = true;
+      const result = await ensureGitWorkspace(this.sandboxDir, this.repoUrl);
+      logger.info({ repoUrl: this.repoUrl, sandboxDir: this.sandboxDir, ...result }, 'Git workspace setup for agent');
     }
     return this.sandboxDir;
   }

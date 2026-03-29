@@ -15,7 +15,16 @@ export const TOOL_EMOJIS: Record<string, string> = {
   read_local_file: '\u{1F4C4}',
   list_workspace: '\u{1F4C2}',
   run_terminal: '\u{1F4BB}',
-  git_command: '\u{1F500}',
+  git_status: '\u{1F4CB}',
+  git_diff: '\u{1F504}',
+  git_log: '\u{1F4DC}',
+  git_add: '\u{2795}',
+  git_commit: '\u{2705}',
+  git_push: '\u{2B06}\uFE0F',
+  git_pull: '\u{2B07}\uFE0F',
+  git_branch: '\u{1F500}',
+  git_checkout: '\u{1F500}',
+  git_clone: '\u{1F4E5}',
   build_project: '\u{1F3D7}\uFE0F',
   web_search: '\u{1F310}',
   web_fetch: '\u{1F310}',
@@ -33,7 +42,16 @@ export const TOOL_LABELS: Record<string, string> = {
   read_local_file: 'Reading',
   list_workspace: 'Listing workspace',
   run_terminal: 'Running',
-  git_command: 'Git',
+  git_status: 'Git status',
+  git_diff: 'Git diff',
+  git_log: 'Git log',
+  git_add: 'Git add',
+  git_commit: 'Git commit',
+  git_push: 'Git push',
+  git_pull: 'Git pull',
+  git_branch: 'Git branch',
+  git_checkout: 'Git checkout',
+  git_clone: 'Git clone',
   build_project: 'Building',
   web_search: 'Searching web',
   web_fetch: 'Fetching',
@@ -61,8 +79,25 @@ export function formatToolDetail(name: string, input: Record<string, unknown>): 
       return input.language ? `(${String(input.language)})` : '';
     case 'run_terminal':
       return input.command ? `\`${String(input.command).slice(0, 80)}\`` : '';
-    case 'git_command':
-      return input.args ? `\`git ${String(input.args).slice(0, 80)}\`` : '';
+    case 'git_status':
+      return input.flags ? `\`${String(input.flags)}\`` : '';
+    case 'git_diff':
+      return input.target ? `\`${String(input.target).slice(0, 80)}\`` : '';
+    case 'git_log':
+      return input.args ? `\`${String(input.args).slice(0, 60)}\`` : '';
+    case 'git_add':
+      return input.files ? `\`${String(input.files).slice(0, 80)}\`` : '';
+    case 'git_commit':
+      return input.message ? `"${String(input.message).slice(0, 60)}"` : '';
+    case 'git_push':
+    case 'git_pull':
+      return input.args ? `\`${String(input.args).slice(0, 60)}\`` : '';
+    case 'git_branch':
+      return input.args ? `\`${String(input.args).slice(0, 60)}\`` : '';
+    case 'git_checkout':
+      return input.target ? `\`${String(input.target).slice(0, 60)}\`` : '';
+    case 'git_clone':
+      return input.url ? `\`${String(input.url).slice(0, 80)}\`` : '';
     case 'build_project':
       return input.action ? `(${String(input.action)})` : '';
     case 'web_search':
