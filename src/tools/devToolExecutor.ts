@@ -184,16 +184,13 @@ export class DevToolExecutor {
   }
 
   /**
-   * Determine git author name/email for commits.
-   * Priority: explicit config > GitHub token user > auto-derived from active model.
+   * Resolve git author identity from GITHUB_TOKEN.
+   * Calls GET /user once and caches the result for the process lifetime.
    */
   private async getGitIdentity(): Promise<{ name: string; email: string }> {
-    if (config.GIT_AUTHOR_NAME && config.GIT_AUTHOR_EMAIL) {
-      return { name: config.GIT_AUTHOR_NAME, email: config.GIT_AUTHOR_EMAIL };
-    }
+    if (cachedGitHubUser) return cachedGitHubUser;
 
-    // Try to resolve identity from GitHub token (cached after first call)
-    if (config.GITHUB_TOKEN && !cachedGitHubUser) {
+    if (config.GITHUB_TOKEN) {
       try {
         const res = await fetch('https://api.github.com/user', {
           headers: {
@@ -205,40 +202,17 @@ export class DevToolExecutor {
           const user = await res.json() as { login: string; name: string | null; id: number };
           cachedGitHubUser = {
             name: user.name || user.login,
-            // Use the GitHub noreply email so the commit is linked to the account
             email: `${user.id}+${user.login}@users.noreply.github.com`,
           };
           logger.info(`Git identity resolved from GitHub token: ${cachedGitHubUser.name} <${cachedGitHubUser.email}>`);
+          return cachedGitHubUser;
         }
       } catch {
-        // Network error — fall through to model-based default
+        // Network error — fall through to default
       }
     }
 
-    if (cachedGitHubUser) {
-      return {
-        name: config.GIT_AUTHOR_NAME || cachedGitHubUser.name,
-        email: config.GIT_AUTHOR_EMAIL || cachedGitHubUser.email,
-      };
-    }
-
-    const model = config.ANTHROPIC_MODEL;
-
-    let name: string;
-    if (model === 'claude-code' || model.startsWith('claude-code-') || model.startsWith('claude-')) {
-      name = 'Claude';
-    } else if (model.startsWith('ollama/')) {
-      name = `Ollama (${model.replace(/^ollama\//, '')})`;
-    } else if (model.startsWith('gemini-')) {
-      name = 'Gemini';
-    } else {
-      name = 'AI Assistant';
-    }
-
-    return {
-      name: config.GIT_AUTHOR_NAME || name,
-      email: config.GIT_AUTHOR_EMAIL || 'noreply@users.noreply.github.com',
-    };
+    return { name: 'AI Assistant', email: 'noreply@users.noreply.github.com' };
   }
 
   private async buildProject(input: Record<string, unknown>): Promise<string> {
