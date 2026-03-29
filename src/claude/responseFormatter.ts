@@ -78,6 +78,25 @@ export class ResponseStreamer {
   }
 
   /**
+   * Call this after tool calls are done so the final response is sent as a
+   * new message instead of editing the "Thinking..." / "Working..." message.
+   * The initial message gets updated to a status summary; the actual response
+   * appears below the tool-call messages in the thread.
+   */
+  async detachForNewMessage(toolSummary?: string): Promise<void> {
+    // Update the initial message with a brief status instead of leaving "Thinking..."
+    if (this.currentMessage && this.sentMessages.length === 0) {
+      try {
+        await this.currentMessage.edit(toolSummary || '*Processing...*');
+      } catch { /* ignore */ }
+    }
+    // Reset state so next flush sends a new message
+    this.currentMessage = null;
+    this.sentMessages = [];
+    this.buffer = '';
+  }
+
+  /**
    * Called when the stream is complete. Sends any remaining content.
    */
   async finish(): Promise<Message[]> {
