@@ -220,6 +220,7 @@ export function handleMessageCreate(
             session.repoOwner || '',
             session.repoName || '',
             session.id,
+            session.repoContext?.repoUrl,
           );
           let lastToolMsg: import('discord.js').Message | null = null;
           const loopStart = Date.now();

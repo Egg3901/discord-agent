@@ -1,17 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
-import { spawn, execFile, type ChildProcess } from 'node:child_process';
-import { promisify } from 'node:util';
-import { readdir } from 'node:fs/promises';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { nanoid } from 'nanoid';
-
-const execFileAsync = promisify(execFile);
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
 import { buildSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
-import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations, toOpenAITools } from '../tools/toolDefinitions.js';
+import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, GIT_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations, toOpenAITools } from '../tools/toolDefinitions.js';
 import { getSandboxDir } from '../tools/scriptExecutor.js';
+import { ensureGitWorkspace } from '../tools/devToolExecutor.js';
 import { saveClaudeCodeSession, loadClaudeCodeSessionMap } from '../storage/database.js';
 import { isModelAvailable, isOllamaReachable, ensureModelPulled, isRemoteOllama } from './ollamaModels.js';
 import type { Provider } from '../keys/types.js';
@@ -133,6 +130,7 @@ function getActiveTools(options: StreamOptions): import('../tools/toolDefinition
   }
   if (config.ENABLE_DEV_TOOLS) {
     tools.push(...DEV_TOOLS);
+    tools.push(...GIT_TOOLS);
   }
   if (options.enableWebSearch) {
     tools.push(...WEB_TOOLS);
@@ -468,24 +466,10 @@ export class AIClient {
       // Get or create a per-session sandbox directory so the CC subprocess has an isolated workspace.
       const sandboxDir = await getSandboxDir(options.sessionId);
 
-      // Clone the repo into the sandbox so CC can use native file tools (Read, Grep, etc.)
-      // Only clone on the first message (when sandbox is empty and no existing CC session).
-      if (options.repoContext?.repoUrl && !existingSessionId) {
-        const files = await readdir(sandboxDir);
-        if (files.length === 0) {
-          try {
-            const cloneUrl = config.GITHUB_TOKEN
-              ? options.repoContext.repoUrl.replace('https://github.com/', `https://x-access-token:${config.GITHUB_TOKEN}@github.com/`)
-              : options.repoContext.repoUrl;
-            await execFileAsync('git', ['clone', '--depth', '1', cloneUrl, '.'], {
-              cwd: sandboxDir,
-              timeout: 60_000,
-            });
-            logger.info({ repoUrl: options.repoContext.repoUrl, sandboxDir }, 'Cloned repo into CC sandbox');
-          } catch (cloneErr) {
-            logger.warn({ err: cloneErr, repoUrl: options.repoContext.repoUrl }, 'Failed to clone repo into CC sandbox');
-          }
-        }
+      // Ensure the workspace is a proper git repo — clone if new, pull if existing.
+      if (options.repoContext?.repoUrl) {
+        const wsResult = await ensureGitWorkspace(sandboxDir, options.repoContext.repoUrl);
+        logger.info({ repoUrl: options.repoContext.repoUrl, sandboxDir, ...wsResult }, 'Git workspace setup');
       }
 
       // Build env: inherit the host's Claude Code login (Max plan / OAuth).

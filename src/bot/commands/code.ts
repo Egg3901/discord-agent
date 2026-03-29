@@ -304,6 +304,7 @@ export function createCodeCommand(
               repoOwner || '',
               repoName || '',
               session.id,
+              repoUrl || undefined,
             );
             let lastToolMsg: import('discord.js').Message | null = null;
             const result = await runAgentLoop(

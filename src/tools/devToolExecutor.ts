@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
+import { access, readFile, readdir, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { config } from '../config.js';
@@ -22,6 +22,12 @@ const BLOCKED_PATTERNS = [
 /** Shell metacharacters that could allow command injection when interpolated into bash -c. */
 const SHELL_INJECTION_CHARS = /[;|&`$(){}!<>\n\r]/;
 
+/** All git tool names for routing. */
+export const GIT_TOOL_NAMES = new Set([
+  'git_status', 'git_diff', 'git_log', 'git_add', 'git_commit',
+  'git_push', 'git_pull', 'git_branch', 'git_checkout', 'git_clone',
+]);
+
 /**
  * Execute dev tools (terminal, git, build) in the session workspace.
  */
@@ -29,11 +35,12 @@ export class DevToolExecutor {
   constructor(private sandboxDir: string) {}
 
   async execute(toolName: string, input: Record<string, unknown>): Promise<string> {
+    if (GIT_TOOL_NAMES.has(toolName)) {
+      return this.gitTool(toolName, input);
+    }
     switch (toolName) {
       case 'run_terminal':
         return this.runTerminal(input);
-      case 'git_command':
-        return this.gitCommand(input);
       case 'build_project':
         return this.buildProject(input);
       default:
@@ -58,23 +65,100 @@ export class DevToolExecutor {
     return this.exec('bash', ['-c', command], DEV_TIMEOUT_MS);
   }
 
-  private async gitCommand(input: Record<string, unknown>): Promise<string> {
-    const args = input.args;
-    if (typeof args !== 'string' || args.trim().length === 0) {
-      return 'Error: args must be a non-empty string';
+  /**
+   * Route a specific git_* tool to the correct git subcommand.
+   * Each tool has its own parameter shape, so we build the git args here.
+   */
+  private async gitTool(toolName: string, input: Record<string, unknown>): Promise<string> {
+    let gitArgs: string;
+
+    switch (toolName) {
+      case 'git_status': {
+        const flags = typeof input.flags === 'string' ? input.flags.trim() : '';
+        gitArgs = `status${flags ? ' ' + flags : ''}`;
+        break;
+      }
+      case 'git_diff': {
+        const target = typeof input.target === 'string' ? input.target.trim() : '';
+        gitArgs = `diff${target ? ' ' + target : ''}`;
+        break;
+      }
+      case 'git_log': {
+        const args = typeof input.args === 'string' ? input.args.trim() : '--oneline -20';
+        gitArgs = `log ${args}`;
+        break;
+      }
+      case 'git_add': {
+        const files = typeof input.files === 'string' ? input.files.trim() : '';
+        if (!files) return 'Error: files parameter is required (e.g. "." or "src/index.ts")';
+        gitArgs = `add ${files}`;
+        break;
+      }
+      case 'git_commit': {
+        const message = typeof input.message === 'string' ? input.message.trim() : '';
+        if (!message) return 'Error: message parameter is required';
+        // Use -- to prevent message from being interpreted as flags.
+        // We pass via -m; the message is shell-escaped below.
+        gitArgs = `commit -m "${message.replace(/"/g, '\\"')}"`;
+        break;
+      }
+      case 'git_push': {
+        const args = typeof input.args === 'string' ? input.args.trim() : '';
+        gitArgs = `push${args ? ' ' + args : ''}`;
+        break;
+      }
+      case 'git_pull': {
+        const args = typeof input.args === 'string' ? input.args.trim() : '';
+        gitArgs = `pull${args ? ' ' + args : ''}`;
+        break;
+      }
+      case 'git_branch': {
+        const args = typeof input.args === 'string' ? input.args.trim() : '';
+        gitArgs = `branch${args ? ' ' + args : ''}`;
+        break;
+      }
+      case 'git_checkout': {
+        const target = typeof input.target === 'string' ? input.target.trim() : '';
+        if (!target) return 'Error: target parameter is required (branch name or file path)';
+        gitArgs = `checkout ${target}`;
+        break;
+      }
+      case 'git_clone': {
+        const url = typeof input.url === 'string' ? input.url.trim() : '';
+        if (!url) return 'Error: url parameter is required';
+        if (!url.startsWith('https://')) return 'Error: url must start with https://';
+        // Inject auth token into clone URL if available
+        const cloneUrl = config.GITHUB_TOKEN
+          ? url.replace('https://github.com/', `https://x-access-token:${config.GITHUB_TOKEN}@github.com/`)
+          : url;
+        gitArgs = `clone --depth 1 ${cloneUrl} .`;
+        break;
+      }
+      default:
+        return `Unknown git tool: ${toolName}`;
     }
-    if (args.length > 1000) {
-      return 'Error: git args too long (max 1000 chars)';
+
+    return this.execGitCommand(gitArgs);
+  }
+
+  /**
+   * Execute a constructed git command string with proper auth and identity.
+   */
+  private async execGitCommand(gitArgs: string): Promise<string> {
+    if (gitArgs.length > 2000) {
+      return 'Error: git command too long';
     }
 
     // Block shell metacharacters that could allow command injection
-    // (args are interpolated into `bash -c "git ${args}"`)
-    if (SHELL_INJECTION_CHARS.test(args)) {
-      return 'Error: git args contain disallowed characters (shell metacharacters are not permitted)';
+    // (except for quotes and hyphens which are needed for commit messages and flags)
+    // We allow: - _ . / ~ @ = " ' : (needed for URLs, flags, messages, refs)
+    // We block: ; | & ` $ () {} ! < > \n \r (shell injection vectors)
+    const DANGEROUS_CHARS = /[;|&`$(){}!<>\n\r]/;
+    if (DANGEROUS_CHARS.test(gitArgs)) {
+      return 'Error: git command contains disallowed shell characters';
     }
 
-    // Also apply the general blocked patterns
-    const blocked = BLOCKED_PATTERNS.find((p) => p.test(args));
+    const blocked = BLOCKED_PATTERNS.find((p) => p.test(gitArgs));
     if (blocked) {
       return 'Error: command blocked for safety reasons';
     }
@@ -82,8 +166,7 @@ export class DevToolExecutor {
     // Configure git credential helper when GITHUB_TOKEN is available
     const { env: extraEnv, cleanup } = await this.getGitCredentialEnv();
 
-    // Set git author/committer identity to avoid Vercel ignoring bot-authored commits.
-    // Uses explicit config if set, otherwise derives a friendly name from the active model.
+    // Set git author/committer identity
     const { name: gitName, email: gitEmail } = this.getGitIdentity();
     extraEnv['GIT_AUTHOR_NAME'] = gitName;
     extraEnv['GIT_COMMITTER_NAME'] = gitName;
@@ -91,8 +174,7 @@ export class DevToolExecutor {
     extraEnv['GIT_COMMITTER_EMAIL'] = gitEmail;
 
     try {
-      // Split args for spawn — use shell to handle quoting
-      return await this.exec('bash', ['-c', `git ${args}`], GIT_TIMEOUT_MS, extraEnv);
+      return await this.exec('bash', ['-c', `git ${gitArgs}`], GIT_TIMEOUT_MS, extraEnv);
     } finally {
       await cleanup();
     }
@@ -351,5 +433,83 @@ export class DevToolExecutor {
     }
 
     return parts.join('\n');
+  }
+}
+
+/**
+ * Ensure the sandbox directory is set up as a git workspace for the given repo.
+ * - If empty: shallow clone the repo
+ * - If already a git repo: fetch & pull to get latest changes
+ * - Sets up auth if GITHUB_TOKEN is available
+ *
+ * Called at session startup so the model always sees a valid git repo.
+ */
+export async function ensureGitWorkspace(
+  sandboxDir: string,
+  repoUrl: string,
+): Promise<{ ok: boolean; message: string }> {
+  const execGit = (args: string[], timeoutMs = 60_000): Promise<{ stdout: string; stderr: string; code: number | null }> => {
+    return new Promise((resolve) => {
+      const env: Record<string, string | undefined> = { ...process.env, HOME: sandboxDir };
+      // Set up auth
+      if (config.GITHUB_TOKEN) {
+        env['GIT_TERMINAL_PROMPT'] = '0';
+      }
+      const proc = spawn('git', args, {
+        cwd: sandboxDir,
+        timeout: timeoutMs,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env,
+      });
+      let stdout = '';
+      let stderr = '';
+      proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+      proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+      proc.on('close', (code) => resolve({ stdout, stderr, code }));
+      proc.on('error', (err) => resolve({ stdout, stderr: err.message, code: 1 }));
+    });
+  };
+
+  try {
+    const files = await readdir(sandboxDir);
+
+    // Check if already a git repo
+    const isGitRepo = files.includes('.git');
+
+    if (isGitRepo) {
+      // Already cloned — pull latest
+      logger.info({ sandboxDir, repoUrl }, 'Workspace already has git repo, pulling latest');
+      const result = await execGit(['pull', '--ff-only'], 30_000);
+      if (result.code === 0) {
+        return { ok: true, message: 'Pulled latest changes' };
+      }
+      // Pull failed (diverged, etc.) — still usable, just warn
+      logger.warn({ stderr: result.stderr, sandboxDir }, 'Git pull failed, workspace may be stale');
+      return { ok: true, message: 'Workspace has existing repo (pull failed, using as-is)' };
+    }
+
+    if (files.length > 0) {
+      // Directory has files but no .git — can't clone into it
+      logger.warn({ sandboxDir, fileCount: files.length }, 'Workspace has files but is not a git repo');
+      return { ok: false, message: 'Workspace has existing files but is not a git repo' };
+    }
+
+    // Empty directory — clone
+    const cloneUrl = config.GITHUB_TOKEN
+      ? repoUrl.replace('https://github.com/', `https://x-access-token:${config.GITHUB_TOKEN}@github.com/`)
+      : repoUrl;
+
+    logger.info({ repoUrl, sandboxDir }, 'Cloning repo into workspace');
+    const result = await execGit(['clone', '--depth', '1', cloneUrl, '.']);
+    if (result.code === 0) {
+      return { ok: true, message: 'Repository cloned successfully' };
+    }
+
+    logger.warn({ stderr: result.stderr, code: result.code, repoUrl }, 'Git clone failed');
+    return { ok: false, message: `Clone failed: ${result.stderr.slice(0, 200)}` };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ err, sandboxDir, repoUrl }, 'ensureGitWorkspace failed');
+    return { ok: false, message: `Workspace setup error: ${msg}` };
   }
 }

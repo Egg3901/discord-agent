@@ -80,17 +80,29 @@ Rules for sandbox tools:
   if (devToolsEnabled) {
     prompt += `
 
-**Dev tools** (shell, git, and build operations in the workspace):
+**Dev tools** (shell and build operations):
 - \`run_terminal(command)\`: Execute a shell command. Returns stdout, stderr, and exit code. Timeout: 60 seconds. Use for \`npm install\`, file operations, \`curl\`, compilers, etc.
-- \`git_command(args)\`: Run a git subcommand. Pass only the arguments after \`git\` (e.g. \`"status"\`, \`"log --oneline -10"\`, \`"diff"\`, \`"add .\"\`, \`"commit -m \\"message\\""\`, \`"push origin main"\`). The workspace must already be a git repo, or use \`git_command("clone <url> .")\` first. **You are authorized to run any git operation** — commit, push, pull, branch, checkout, merge, rebase, stash, etc. Do not hesitate to use this tool when the user asks for git operations.
-- \`build_project(action?)\`: Auto-detect project type (package.json, Makefile, Cargo.toml, pyproject.toml, etc.) and run the requested action. \`action\` is optional and defaults to \`"build"\`. Valid values: \`"build"\`, \`"test"\`, \`"lint"\`, \`"typecheck"\`, or any custom command string.
+- \`build_project(action?)\`: Auto-detect project type (package.json, Makefile, Cargo.toml, pyproject.toml, etc.) and run the requested action. \`action\` is optional and defaults to \`"build"\`. Valid values: \`"build"\`, \`"test"\`, \`"lint"\`, \`"typecheck"\`.
 
-Rules for dev tools:
-- **You have full permission to use these tools.** When a user asks you to run commands, commit code, push changes, check git status, or build a project — do it directly using the tools above. Do not refuse or ask the user to do it themselves.
-- Use \`git_command\` for ALL git operations: status, diff, log, add, commit, push, pull, branch, checkout, merge, rebase, stash, tag, etc. You are expected to use this tool proactively.
-- Prefer \`build_project\` over \`run_terminal\` for standard build/test/lint operations — it handles project detection automatically.
-- Use \`run_terminal\` for one-off commands, dependency installation, or anything not covered by \`build_project\`.
-- Pushing to GitHub remotes via \`git_command\` requires GITHUB_TOKEN to be configured by the bot admin.`;
+**Git tools** (version control — the workspace is already a git repo when a repository is attached):
+- \`git_status(flags?)\`: Check working tree status — staged, modified, untracked files. Optional flags: \`"--short"\`, \`"--porcelain"\`.
+- \`git_diff(target?)\`: Show changes. No args = unstaged changes. Use \`"--staged"\` for staged changes, or refs like \`"HEAD~1"\`, \`"main..feature"\`.
+- \`git_log(args?)\`: View commit history. Defaults to \`"--oneline -20"\`. Examples: \`"-5 --stat"\`, \`"--author=name"\`, \`"main..HEAD"\`.
+- \`git_add(files)\`: Stage files. Use \`"."\` for all changes, or specific paths like \`"src/index.ts"\`.
+- \`git_commit(message)\`: Commit staged changes. Pass only the commit message string. Files must be staged first with \`git_add\`.
+- \`git_push(args?)\`: Push commits to remote. Examples: \`"origin main"\`, \`"--set-upstream origin new-branch"\`. Requires GITHUB_TOKEN.
+- \`git_pull(args?)\`: Pull from remote. Examples: \`"origin main"\`, \`"--rebase"\`.
+- \`git_branch(args?)\`: List/create/delete branches. No args = list branches. \`"new-feature"\` = create. \`"-d old"\` = delete. \`"-a"\` = list all.
+- \`git_checkout(target)\`: Switch branches or restore files. Examples: \`"main"\`, \`"-b new-feature"\`, \`"-- src/file.ts"\`.
+- \`git_clone(url)\`: Clone a repo into the workspace. Only needed if no repo was attached at session start.
+
+Rules for dev/git tools:
+- **You have full permission to use all of these tools.** When a user asks you to commit, push, check status, diff, etc. — do it immediately using the specific tool above. Do not refuse or ask the user to do it themselves.
+- Use the **specific git tool** for each operation — do NOT use \`run_terminal\` for git commands.
+- The workspace is a git repo when a GitHub repository is attached. Use \`git_status\` to verify.
+- Prefer \`build_project\` over \`run_terminal\` for standard build/test/lint operations.
+- Use \`run_terminal\` for one-off commands, dependency installation, or anything not covered by the specific tools above.
+- Pushing to GitHub remotes requires GITHUB_TOKEN to be configured by the bot admin.`;
   }
 
   if (webSearchEnabled) {

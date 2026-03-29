@@ -189,21 +189,6 @@ export const DEV_TOOLS: ToolDefinition[] = [
     },
   },
   {
-    name: 'git_command',
-    description:
-      'Run a git command in the workspace. Use for version control operations: status, diff, log, add, commit, branch, checkout, clone, pull, push. The workspace must be a git repo (or use git clone first). Returns command output.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        args: {
-          type: 'string',
-          description: 'Git subcommand and arguments (e.g. "status", "diff --staged", "log --oneline -10", "add .", "commit -m \\"fix: typo\\"")',
-        },
-      },
-      required: ['args'],
-    },
-  },
-  {
     name: 'build_project',
     description:
       'Detect the project type and run its build/test commands. Auto-detects package.json (npm/yarn/pnpm), Makefile, Cargo.toml, pyproject.toml, etc. Pass a custom command to override auto-detection. Returns build output and success/failure status.',
@@ -216,6 +201,164 @@ export const DEV_TOOLS: ToolDefinition[] = [
         },
       },
       required: [],
+    },
+  },
+];
+
+/**
+ * Git tools — each operation is a separate tool so models clearly know what's available.
+ * Available when ENABLE_DEV_TOOLS is true. These operate on the workspace directory,
+ * which is automatically set up as a git repo when a GitHub repository is attached.
+ */
+export const GIT_TOOLS: ToolDefinition[] = [
+  {
+    name: 'git_status',
+    description:
+      'Show the working tree status. Returns which files are staged, modified, untracked, etc. Use this to check the current state before committing or to see what has changed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        flags: {
+          type: 'string',
+          description: 'Optional flags (e.g. "--short", "--porcelain"). Leave empty for default verbose output.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'git_diff',
+    description:
+      'Show changes between commits, the working tree, and the staging area. By default shows unstaged changes. Use "--staged" to see what will be committed, or pass commit refs to compare.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: 'What to diff (e.g. "--staged", "HEAD~1", "main..feature", "path/to/file"). Leave empty for unstaged changes.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'git_log',
+    description:
+      'Show commit history. Returns commit hashes, authors, dates, and messages. Defaults to last 20 commits in oneline format.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'Log arguments (e.g. "-10", "--oneline --graph", "--author=name", "main..HEAD", "--stat"). Defaults to "--oneline -20".',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'git_add',
+    description:
+      'Stage files for the next commit. Use "." to stage all changes, or specify individual file paths.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'string',
+          description: 'Files to stage (e.g. ".", "src/index.ts", "src/a.ts src/b.ts"). Use "." for all changes.',
+        },
+      },
+      required: ['files'],
+    },
+  },
+  {
+    name: 'git_commit',
+    description:
+      'Create a new commit with the staged changes. Files must be staged first with git_add.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        message: {
+          type: 'string',
+          description: 'Commit message (e.g. "fix: resolve null pointer in auth module")',
+        },
+      },
+      required: ['message'],
+    },
+  },
+  {
+    name: 'git_push',
+    description:
+      'Push local commits to a remote repository. Requires GITHUB_TOKEN to be configured for authentication.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'Push arguments (e.g. "origin main", "origin feature-branch", "--set-upstream origin new-branch"). Defaults to pushing the current branch.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'git_pull',
+    description:
+      'Pull changes from a remote repository into the current branch.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'Pull arguments (e.g. "origin main", "--rebase"). Defaults to pulling from the tracking branch.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'git_branch',
+    description:
+      'List, create, or delete branches. With no arguments, lists local branches and shows the current one.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'Branch arguments (e.g. "new-feature" to create, "-d old-branch" to delete, "-a" to list all including remote, "-m old new" to rename). Leave empty to list branches.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'git_checkout',
+    description:
+      'Switch branches or restore working tree files. Use this to switch to an existing branch, create and switch to a new branch with "-b", or restore files.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: 'Branch name or file path (e.g. "main", "-b new-feature", "-- src/file.ts" to restore a file).',
+        },
+      },
+      required: ['target'],
+    },
+  },
+  {
+    name: 'git_clone',
+    description:
+      'Clone a repository into the workspace. Only needed if the workspace was not automatically set up with a repo. Clones into the current directory.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Repository URL to clone (e.g. "https://github.com/owner/repo")',
+        },
+      },
+      required: ['url'],
     },
   },
 ];
