@@ -43,6 +43,26 @@ export class RateLimiter {
     return Math.max(0, config.MAX_REQUESTS_PER_MINUTE - recent.length);
   }
 
+  /** Get detailed rate limit info for user-facing messages. */
+  getInfo(userId: string): { remaining: number; limit: number; retryAfterMs: number } {
+    const now = Date.now();
+    const entry = this.entries.get(userId);
+    const limit = config.MAX_REQUESTS_PER_MINUTE;
+    if (!entry) return { remaining: limit, limit, retryAfterMs: 0 };
+
+    const recent = entry.timestamps.filter((t) => now - t < windowMs);
+    const remaining = Math.max(0, limit - recent.length);
+
+    // Time until the oldest timestamp expires (opening up a slot)
+    let retryAfterMs = 0;
+    if (remaining === 0 && recent.length > 0) {
+      const oldest = Math.min(...recent);
+      retryAfterMs = Math.max(0, windowMs - (now - oldest));
+    }
+
+    return { remaining, limit, retryAfterMs };
+  }
+
   private cleanup(): void {
     const now = Date.now();
     for (const [userId, entry] of this.entries) {

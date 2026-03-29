@@ -4,11 +4,13 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   SlashCommandBuilder,
+  EmbedBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { formatApiError } from '../../utils/errors.js';
+import { BotColors, formatDuration } from '../../utils/embedHelpers.js';
 import type { CommandHandler } from './types.js';
 
 const startTime = Date.now();
@@ -37,21 +39,6 @@ function getGitCommit(): { hash: string; date: string; message: string } | null 
   }
 }
 
-function formatUptime(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${days}d`);
-  if (hours > 0) parts.push(`${hours}h`);
-  if (minutes > 0) parts.push(`${minutes}m`);
-  parts.push(`${secs}s`);
-  return parts.join(' ');
-}
-
 export function createVersionCommand(): CommandHandler {
   return {
     data: new SlashCommandBuilder()
@@ -69,18 +56,25 @@ export function createVersionCommand(): CommandHandler {
 
       try {
         const version = getPackageVersion();
-        const uptime = formatUptime(Date.now() - startTime);
+        const uptime = formatDuration(Date.now() - startTime);
         const commit = getGitCommit();
 
-        let text = `**Discord Agent v${version}**\n`;
-        text += `**Uptime:** ${uptime}\n`;
+        const embed = new EmbedBuilder()
+          .setColor(BotColors.Primary)
+          .setTitle(`Discord Agent v${version}`)
+          .addFields(
+            { name: 'Uptime', value: uptime, inline: true },
+          )
+          .setTimestamp();
 
         if (commit) {
-          text += `**Latest Commit:** \`${commit.hash}\` — ${commit.message}\n`;
-          text += `**Commit Date:** ${commit.date}`;
+          embed.addFields(
+            { name: 'Latest Commit', value: `\`${commit.hash}\` — ${commit.message}`, inline: false },
+            { name: 'Commit Date', value: commit.date, inline: true },
+          );
         }
 
-        await interaction.reply({ content: text, ephemeral: true });
+        await interaction.reply({ embeds: [embed], ephemeral: true });
       } catch (err) {
         const msg = formatApiError(err);
         if (interaction.deferred) {

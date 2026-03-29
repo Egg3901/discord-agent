@@ -5,6 +5,7 @@ import { handleReady } from './bot/events/ready.js';
 import { handleInteractionCreate } from './bot/events/interactionCreate.js';
 import { handleMessageCreate } from './bot/events/messageCreate.js';
 import { handleReactionAdd } from './bot/events/reactionAdd.js';
+import { handleGithubLinkDetect } from './bot/events/githubLinkDetect.js';
 import { registerCommands } from './bot/commands/registry.js';
 import { createAskCommand } from './bot/commands/ask.js';
 import { createCodeCommand } from './bot/commands/code.js';
@@ -90,6 +91,7 @@ async function main() {
   handleInteractionCreate(client, commandMap);
   handleMessageCreate(client, sessionManager, aiClient, rateLimiter, repoFetcher);
   handleReactionAdd(client, sessionManager);
+  handleGithubLinkDetect(client);
 
   // Login
   await client.login(config.DISCORD_TOKEN);

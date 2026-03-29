@@ -19,6 +19,7 @@ import { runAgentLoop } from '../../claude/agentLoop.js';
 import { config } from '../../config.js';
 import { logUsage } from '../../storage/database.js';
 import { TOOL_EMOJIS, TOOL_LABELS, formatToolDetail, formatCCToolDetail } from '../../utils/toolDisplay.js';
+import { sendCompletionWithNextSteps } from '../../utils/nextSteps.js';
 
 export function handleMessageCreate(
   client: Client,
@@ -200,6 +201,7 @@ export function handleMessageCreate(
           const loopStart = Date.now();
           let fullResponse = '';
           let toolCallCount = 0;
+          const toolNames: string[] = [];
           let detached = false;
           let lastToolMsg: import('discord.js').Message | null = null;
           for await (const event of aiClient.streamResponse(session.messages, baseStreamOptions)) {
@@ -219,6 +221,7 @@ export function handleMessageCreate(
                 await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
               }
               toolCallCount++;
+              toolNames.push(event.name);
               const detail = formatCCToolDetail(event.name, event.input);
               lastToolMsg = await channel.send(`> \u{1F527} \`${event.name}\`${detail ? ` ${detail}` : ''}`);
             }
@@ -232,8 +235,11 @@ export function handleMessageCreate(
           await streamer.finish();
           sessionManager.addMessage(threadId, { role: 'assistant', content: fullResponse });
           if (toolCallCount > 0) {
-            const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
-            await channel.send(`<@${message.author.id}> Done \u2014 ${toolCallCount} tool call(s) in ${elapsed}s`).catch(() => {});
+            await sendCompletionWithNextSteps(channel, message.author.id, {
+              toolNames,
+              totalCalls: toolCallCount,
+              elapsed: Date.now() - loopStart,
+            });
           }
         } else if (hasTools) {
           // Agentic mode for Anthropic / Gemini
@@ -246,6 +252,7 @@ export function handleMessageCreate(
           );
           let lastToolMsg: import('discord.js').Message | null = null;
           let agentToolCount = 0;
+          const agentToolNames: string[] = [];
           let agentDetached = false;
           const loopStart = Date.now();
           const result = await runAgentLoop(
@@ -265,6 +272,7 @@ export function handleMessageCreate(
               },
               onToolStart: async (name, input) => {
                 agentToolCount++;
+                agentToolNames.push(name);
                 const emoji = TOOL_EMOJIS[name] || '\u{1F527}';
                 const label = TOOL_LABELS[name] || name;
                 const detail = formatToolDetail(name, input);
@@ -291,9 +299,12 @@ export function handleMessageCreate(
             sessionManager.addMessage(threadId, msg);
           }
           if (result.toolCallCount > 0) {
-            const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
             logger.info({ sessionId: session.id, toolCalls: result.toolCallCount, iterations: result.iterations }, 'Agent loop completed');
-            await channel.send(`<@${message.author.id}> Done \u2014 ${result.toolCallCount} tool call(s) in ${elapsed}s`).catch(() => {});
+            await sendCompletionWithNextSteps(channel, message.author.id, {
+              toolNames: agentToolNames,
+              totalCalls: result.toolCallCount,
+              elapsed: Date.now() - loopStart,
+            });
           }
         } else {
           // Simple streaming mode

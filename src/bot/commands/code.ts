@@ -23,6 +23,7 @@ import { ToolExecutor } from '../../tools/toolExecutor.js';
 import { runAgentLoop } from '../../claude/agentLoop.js';
 import { config } from '../../config.js';
 import { TOOL_EMOJIS, TOOL_LABELS, formatToolDetail, formatCCToolDetail } from '../../utils/toolDisplay.js';
+import { rateLimitEmbed, BotColors } from '../../utils/embedHelpers.js';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
 
@@ -77,7 +78,7 @@ export function createCodeCommand(
 
       if (!rateLimiter.check(interaction.user.id)) {
         await interaction.reply({
-          content: 'Rate limit exceeded. Please wait a moment.',
+          embeds: [rateLimitEmbed(rateLimiter.getInfo(interaction.user.id))],
           ephemeral: true,
         });
         return;
@@ -110,10 +111,21 @@ export function createCodeCommand(
         const meaningfullyDifferent = improved.trim() !== originalPrompt.trim() && improved.length > 0;
 
         if (meaningfullyDifferent) {
+          const { EmbedBuilder } = await import('discord.js');
+          const compareEmbed = new EmbedBuilder()
+            .setColor(BotColors.Info)
+            .setTitle('Prompt Improvement Suggested')
+            .addFields(
+              { name: 'Original', value: originalPrompt.slice(0, 1024) },
+              { name: 'Improved', value: improved.slice(0, 1024) },
+            )
+            .setFooter({ text: 'Choose within 30s — defaults to original if no selection' });
+
           const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
               .setCustomId('use_improved')
-              .setLabel('✅ Use Improved')
+              .setLabel('Use Improved')
+              .setEmoji('✅')
               .setStyle(ButtonStyle.Success),
             new ButtonBuilder()
               .setCustomId('use_original')
@@ -121,13 +133,7 @@ export function createCodeCommand(
               .setStyle(ButtonStyle.Secondary),
           );
 
-          const preview = [
-            `**Original:** ${originalPrompt}`,
-            ``,
-            `**Suggested:** ${improved}`,
-          ].join('\n').slice(0, 1800);
-
-          await interaction.editReply({ content: preview, components: [row] });
+          await interaction.editReply({ embeds: [compareEmbed], components: [row] });
 
           try {
             const reply = await interaction.fetchReply();
@@ -142,7 +148,11 @@ export function createCodeCommand(
             // Timed out — use original
           }
 
-          await interaction.editReply({ content: `Starting: *${prompt.slice(0, 120)}${prompt.length > 120 ? '…' : ''}*`, components: [] });
+          await interaction.editReply({
+            content: `Starting: *${prompt.slice(0, 120)}${prompt.length > 120 ? '…' : ''}*`,
+            embeds: [],
+            components: [],
+          });
         }
         // --- End improve flow ---
 
