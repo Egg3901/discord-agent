@@ -67,7 +67,7 @@ export function createCodeCommand(
     },
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null)) {
+      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
         await interaction.reply({
           content: 'You do not have a role that allows using this bot.',
           ephemeral: true,
@@ -93,7 +93,14 @@ export function createCodeCommand(
 
       try {
         const channel = interaction.channel;
-        if (!channel || !('threads' in channel)) {
+        const isDm = !interaction.guild;
+
+        if (!channel) {
+          await interaction.editReply('Could not access the channel.');
+          return;
+        }
+
+        if (!isDm && !('threads' in channel)) {
           await interaction.editReply('This command must be used in a text channel.');
           return;
         }
@@ -139,29 +146,38 @@ export function createCodeCommand(
         }
         // --- End improve flow ---
 
-        const threadName = prompt.slice(0, 95) + (prompt.length > 95 ? '...' : '');
-        const thread = await (channel as TextChannel).threads.create({
-          name: `\u{1F916} ${threadName}`,
-          autoArchiveDuration: 60,
-          reason: `Coding session started by ${interaction.user.tag}`,
-        });
+        // In DMs, use the DM channel directly instead of creating a thread
+        let sessionChannel: TextChannel | ThreadChannel | import('discord.js').DMChannel;
+        if (isDm) {
+          sessionChannel = channel as import('discord.js').DMChannel;
+          logger.info({ userId: interaction.user.id }, 'Starting DM coding session');
+        } else {
+          const threadName = prompt.slice(0, 95) + (prompt.length > 95 ? '...' : '');
+          const thread = await (channel as TextChannel).threads.create({
+            name: `\u{1F916} ${threadName}`,
+            autoArchiveDuration: 60,
+            reason: `Coding session started by ${interaction.user.tag}`,
+          });
 
-        // Fire-and-forget: generate a better thread name from the prompt
-        (async () => {
-          try {
-            const effectiveModel = config.ANTHROPIC_MODEL;
-            // Skip AI naming for CC to avoid subprocess overhead
-            if (getProviderForModel(effectiveModel) === 'claude-code') return;
-            const title = await aiClient.getResponse(
-              [{ role: 'user', content: `Generate a short 4-6 word title for this coding task. Return ONLY the title, no quotes:\n\n${prompt.slice(0, 200)}` }],
-              {},
-            );
-            const cleaned = title.trim().slice(0, 90);
-            if (cleaned && cleaned.length > 2) {
-              await thread.setName(`🤖 ${cleaned}`);
-            }
-          } catch { /* non-fatal */ }
-        })();
+          // Fire-and-forget: generate a better thread name from the prompt
+          (async () => {
+            try {
+              const effectiveModel = config.ANTHROPIC_MODEL;
+              // Skip AI naming for CC to avoid subprocess overhead
+              if (getProviderForModel(effectiveModel) === 'claude-code') return;
+              const title = await aiClient.getResponse(
+                [{ role: 'user', content: `Generate a short 4-6 word title for this coding task. Return ONLY the title, no quotes:\n\n${prompt.slice(0, 200)}` }],
+                {},
+              );
+              const cleaned = title.trim().slice(0, 90);
+              if (cleaned && cleaned.length > 2) {
+                await thread.setName(`🤖 ${cleaned}`);
+              }
+            } catch { /* non-fatal */ }
+          })();
+
+          sessionChannel = thread;
+        }
 
         // Parse repo if provided
         let repoOwner: string | undefined;
@@ -187,7 +203,7 @@ export function createCodeCommand(
             };
           } catch (err) {
             logger.warn({ err, repoUrl }, 'Failed to fetch repo for /code');
-            await thread.send('> Failed to load repository context. Continuing without it.');
+            await sessionChannel.send('> Failed to load repository context. Continuing without it.');
             repoOwner = undefined;
             repoName = undefined;
             repoContext = undefined;
@@ -196,7 +212,7 @@ export function createCodeCommand(
 
         const session = sessionManager.createSession(
           interaction.user.id,
-          thread.id,
+          sessionChannel.id,
           channel.id,
           repoContext,
         );
@@ -211,17 +227,19 @@ export function createCodeCommand(
           session.repoName = repoName;
         }
 
-        sessionManager.addMessage(thread.id, {
+        sessionManager.addMessage(sessionChannel.id, {
           role: 'user',
           content: prompt,
         });
 
         await interaction.editReply(
-          `Session started! Continue the conversation in <#${thread.id}>${repoUrl ? ` (repo: ${repoOwner}/${repoName})` : ''}`,
+          isDm
+            ? `Session started! Send messages here to continue.${repoUrl ? ` (repo: ${repoOwner}/${repoName})` : ''}`
+            : `Session started! Continue the conversation in <#${sessionChannel.id}>${repoUrl ? ` (repo: ${repoOwner}/${repoName})` : ''}`,
         );
 
-        const thinkingMsg = await thread.send('Thinking...');
-        const streamer = new ResponseStreamer(thread, thinkingMsg);
+        const thinkingMsg = await sessionChannel.send('Thinking...');
+        const streamer = new ResponseStreamer(sessionChannel, thinkingMsg);
 
         // Periodically update the thinking message with elapsed time so users
         // know the bot is alive during long CC or complex requests.
@@ -289,7 +307,7 @@ export function createCodeCommand(
                 }
                 toolCallCount++;
                 const detail = formatCCToolDetail(event.name, event.input);
-                lastToolMsg = await thread.send(`> \u{1F527} \`${event.name}\`${detail ? ` ${detail}` : ''}`);
+                lastToolMsg = await sessionChannel.send(`> \u{1F527} \`${event.name}\`${detail ? ` ${detail}` : ''}`);
               }
             }
             // Mark the last tool as done
@@ -299,10 +317,10 @@ export function createCodeCommand(
             }
             clearInterval(thinkingTimer);
             await streamer.finish();
-            sessionManager.addMessage(thread.id, { role: 'assistant', content: fullResponse });
+            sessionManager.addMessage(sessionChannel.id, { role: 'assistant', content: fullResponse });
             if (toolCallCount > 0) {
               const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
-              await thread.send(`<@${interaction.user.id}> Done \u2014 ${toolCallCount} tool call(s) in ${elapsed}s`);
+              await sessionChannel.send(`<@${interaction.user.id}> Done \u2014 ${toolCallCount} tool call(s) in ${elapsed}s`);
             }
           } else if (hasRepo || config.ENABLE_SCRIPT_EXECUTION || config.ENABLE_DEV_TOOLS || hasWebSearch) {
             // Agentic mode for Anthropic / Gemini
@@ -337,7 +355,7 @@ export function createCodeCommand(
                   const emoji = TOOL_EMOJIS[name] || '\u{1F527}';
                   const label = TOOL_LABELS[name] || name;
                   const detail = formatToolDetail(name, input);
-                  lastToolMsg = await thread.send(`> ${emoji} ${label}${detail ? ` ${detail}` : ''}`);
+                  lastToolMsg = await sessionChannel.send(`> ${emoji} ${label}${detail ? ` ${detail}` : ''}`);
                 },
                 onToolEnd: async (_name, toolResult) => {
                   if (!lastToolMsg) return;
@@ -357,11 +375,11 @@ export function createCodeCommand(
             clearInterval(thinkingTimer);
             await streamer.finish();
             for (const msg of result.newMessages) {
-              sessionManager.addMessage(thread.id, msg);
+              sessionManager.addMessage(sessionChannel.id, msg);
             }
             if (result.toolCallCount > 0) {
               const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
-              await thread.send(`<@${interaction.user.id}> Done \u2014 ${result.toolCallCount} tool call(s) in ${elapsed}s`);
+              await sessionChannel.send(`<@${interaction.user.id}> Done \u2014 ${result.toolCallCount} tool call(s) in ${elapsed}s`);
             }
           } else {
             // Simple streaming mode
@@ -372,7 +390,7 @@ export function createCodeCommand(
               await streamer.push(chunk);
             }
             await streamer.finish();
-            sessionManager.addMessage(thread.id, { role: 'assistant', content: fullResponse });
+            sessionManager.addMessage(sessionChannel.id, { role: 'assistant', content: fullResponse });
           }
         } catch (err) {
           clearInterval(thinkingTimer);

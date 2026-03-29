@@ -36,7 +36,7 @@ export function createAskCommand(
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null)) {
+      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
         await interaction.reply({
           content: 'You do not have a role that allows using this bot.',
           ephemeral: true,

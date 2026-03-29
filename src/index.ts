@@ -25,6 +25,7 @@ import { createImproveCommand } from './bot/commands/improve.js';
 import { createStatusCommand } from './bot/commands/status.js';
 import { createRetryCommand } from './bot/commands/retry.js';
 import { createPersonaCommand } from './bot/commands/persona.js';
+import { createAllowDmsCommand } from './bot/commands/allowdms.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
@@ -70,6 +71,7 @@ async function main() {
     createStatusCommand(sessionManager),
     createRetryCommand(sessionManager, aiClient, rateLimiter),
     createPersonaCommand(sessionManager),
+    createAllowDmsCommand(),
   ];
 
   const commandMap = new Map<string, CommandHandler>();

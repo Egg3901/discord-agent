@@ -4,6 +4,7 @@ import {
   ChannelType,
   type TextChannel,
   type ThreadChannel,
+  type DMChannel,
 } from 'discord.js';
 import { logger } from '../../utils/logger.js';
 import { formatApiError } from '../../utils/errors.js';
@@ -29,19 +30,33 @@ export function handleMessageCreate(
   client.on('messageCreate', async (message: Message) => {
     if (message.author.bot) return;
 
+    const isDm = message.channel.type === ChannelType.DM;
+
     if (
+      !isDm &&
       message.channel.type !== ChannelType.PublicThread &&
       message.channel.type !== ChannelType.PrivateThread
     ) {
       return;
     }
 
-    // Access check
-    if (!isAllowed(message.member)) return;
+    // Access check — pass userId for DM allowlist lookup when member is null
+    if (!isAllowed(message.member, message.author.id)) {
+      if (isDm) {
+        logger.debug({ userId: message.author.id }, 'DM message denied: user not on allowlist');
+      }
+      return;
+    }
 
     const threadId = message.channel.id;
     const session = sessionManager.getByThread(threadId);
-    if (!session) return;
+    if (!session) {
+      // In DMs without an active session, ignore silently
+      if (isDm) {
+        logger.debug({ userId: message.author.id, channelId: threadId }, 'DM message ignored: no active session for this channel');
+      }
+      return;
+    }
 
     // Reject concurrent messages while a response is being generated
     if (session.busy) {
@@ -54,7 +69,7 @@ export function handleMessageCreate(
       return;
     }
 
-    const channel = message.channel as ThreadChannel;
+    const channel = message.channel as ThreadChannel | DMChannel;
 
     // Include file attachment contents and images in the message
     let content = message.content;

@@ -103,6 +103,15 @@ function runMigrations(db: Database.Database): void {
       updated_at INTEGER NOT NULL
     );
   `);
+
+  // Migration: dm_allowlist table for users allowed to interact via DMs
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dm_allowlist (
+      user_id TEXT PRIMARY KEY,
+      added_by TEXT NOT NULL,
+      added_at INTEGER NOT NULL
+    );
+  `);
 }
 
 export function logUsage(entry: {
@@ -225,6 +234,36 @@ export function loadClaudeCodeSessionMap(): Record<string, string> {
 export function deleteClaudeCodeSession(sessionKey: string): void {
   const db = getDatabase();
   db.prepare('DELETE FROM claude_code_sessions WHERE session_key = ?').run(sessionKey);
+}
+
+// --- DM Allowlist ---
+
+export function addDmAllowlistUser(userId: string, addedBy: string): void {
+  const db = getDatabase();
+  db.prepare(
+    'INSERT OR REPLACE INTO dm_allowlist (user_id, added_by, added_at) VALUES (?, ?, ?)',
+  ).run(userId, addedBy, Date.now());
+}
+
+export function removeDmAllowlistUser(userId: string): boolean {
+  const db = getDatabase();
+  const result = db.prepare('DELETE FROM dm_allowlist WHERE user_id = ?').run(userId);
+  return result.changes > 0;
+}
+
+export function isDmAllowlisted(userId: string): boolean {
+  const db = getDatabase();
+  const row = db.prepare('SELECT 1 FROM dm_allowlist WHERE user_id = ?').get(userId);
+  return !!row;
+}
+
+export function listDmAllowlistUsers(): { user_id: string; added_by: string; added_at: number }[] {
+  const db = getDatabase();
+  return db.prepare('SELECT user_id, added_by, added_at FROM dm_allowlist ORDER BY added_at DESC').all() as {
+    user_id: string;
+    added_by: string;
+    added_at: number;
+  }[];
 }
 
 export function closeDatabase(): void {

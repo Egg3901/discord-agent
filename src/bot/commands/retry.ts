@@ -25,7 +25,7 @@ export function createRetryCommand(
 
     async execute(interaction: ChatInputCommandInteraction) {
       try {
-        if (!isAllowed(interaction.member as GuildMember | null)) {
+        if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
           await interaction.reply({ content: 'You do not have a role that allows using this bot.', ephemeral: true });
           return;
         }

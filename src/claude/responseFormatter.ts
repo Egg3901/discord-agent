@@ -1,4 +1,4 @@
-import type { Message, TextChannel, ThreadChannel } from 'discord.js';
+import type { Message, TextChannel, ThreadChannel, DMChannel } from 'discord.js';
 import { splitMessage } from '../utils/chunks.js';
 import { logger } from '../utils/logger.js';
 
@@ -25,7 +25,7 @@ export class ResponseStreamer {
   private startTime = Date.now();
 
   constructor(
-    private channel: TextChannel | ThreadChannel,
+    private channel: TextChannel | ThreadChannel | DMChannel,
     private initialMessage?: Message,
   ) {
     if (initialMessage) {

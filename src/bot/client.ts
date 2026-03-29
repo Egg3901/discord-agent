@@ -8,7 +8,9 @@ export function createDiscordClient(): Client {
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildMessageReactions,
+      GatewayIntentBits.DirectMessages,
+      GatewayIntentBits.DirectMessageReactions,
     ],
-    partials: [Partials.Channel, Partials.Reaction, Partials.User],
+    partials: [Partials.Channel, Partials.Reaction, Partials.User, Partials.Message],
   });
 }
