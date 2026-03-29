@@ -1,7 +1,8 @@
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import type { AIClient, ConversationMessage, ContentBlock, StreamOptions, AIStreamEvent, ToolUseEvent } from './aiClient.js';
-import type { ToolExecutor } from '../tools/toolExecutor.js';
+import type { ToolExecutor, RequestInputPayload } from '../tools/toolExecutor.js';
+import { REQUEST_INPUT_RESULT } from '../tools/toolExecutor.js';
 
 export interface AgentLoopCallbacks {
   onTextChunk: (text: string) => Promise<void>;
@@ -10,6 +11,8 @@ export interface AgentLoopCallbacks {
   onThinking: () => Promise<void>;
   /** Called after each iteration with running totals (for progress display). */
   onProgress?: (iteration: number, toolCallCount: number, elapsedMs: number) => Promise<void>;
+  /** Called when the agent needs user input. Returns the user's response. */
+  onRequestInput?: (payload: RequestInputPayload) => Promise<string>;
 }
 
 export interface AgentLoopResult {
@@ -101,7 +104,6 @@ export async function runAgentLoop(
     }
 
     // Stuck-loop detection: if exact same tool calls as previous iteration, bail.
-    // Use sorted keys for stable comparison (JSON.stringify key order is non-deterministic).
     const currentToolKey = toolUses.map((t) => {
       const sortedInput = Object.keys(t.input).sort().map((k) => `${k}=${JSON.stringify(t.input[k])}`).join(',');
       return `${t.name}:{${sortedInput}}`;
@@ -112,20 +114,33 @@ export async function runAgentLoop(
     }
     previousToolKey = currentToolKey;
 
-    // Execute tools and build tool_result blocks.
-    // Run multiple tool calls in parallel for read-heavy operations (significant
-    // speedup when the AI requests e.g. read_file + search_code simultaneously).
+    // Execute tools and build tool_result blocks
     const toolResultBlocks: ContentBlock[] = [];
     if (toolUses.length === 1) {
-      // Single tool — execute directly (no parallelism overhead)
       const tu = toolUses[0];
       toolCallCount++;
       await callbacks.onToolStart(tu.name, tu.input);
+      
       const result = await toolExecutor.execute(tu.name, tu.input);
-      await callbacks.onToolEnd(tu.name, result);
-      toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: result });
+      
+      // Handle request_input specially
+      if (result === REQUEST_INPUT_RESULT) {
+        if (!callbacks.onRequestInput) {
+          const errorResult = 'Error: Interactive input is not available in this session.';
+          await callbacks.onToolEnd(tu.name, errorResult);
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: errorResult });
+        } else {
+          const payload: RequestInputPayload = parseRequestInputPayload(tu.input);
+          const userResponse = await callbacks.onRequestInput(payload);
+          await callbacks.onToolEnd(tu.name, userResponse);
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: userResponse });
+        }
+      } else {
+        await callbacks.onToolEnd(tu.name, result);
+        toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: result });
+      }
     } else {
-      // Multiple tools — fire start callbacks, execute in parallel, then end callbacks
+      // Multiple tools in parallel
       for (const tu of toolUses) {
         toolCallCount++;
         await callbacks.onToolStart(tu.name, tu.input);
@@ -138,11 +153,20 @@ export async function runAgentLoop(
       for (let i = 0; i < toolUses.length; i++) {
         const tu = toolUses[i];
         const settled = results[i];
-        const result = settled.status === 'fulfilled'
-          ? settled.value
-          : `Error: ${settled.reason instanceof Error ? settled.reason.message : String(settled.reason)}`;
-        await callbacks.onToolEnd(tu.name, result);
-        toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: result });
+        
+        if (settled.status === 'fulfilled' && settled.value === REQUEST_INPUT_RESULT) {
+          // request_input in parallel batch — not supported
+          const errorMsg = 'Error: request_input cannot be used in parallel with other tools. Please call it separately.';
+          await callbacks.onToolEnd(tu.name, errorMsg);
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: errorMsg });
+        } else if (settled.status === 'fulfilled' && typeof settled.value === 'string') {
+          await callbacks.onToolEnd(tu.name, settled.value);
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: settled.value });
+        } else if (settled.status === 'rejected') {
+          const errorMsg = `Error: ${settled.reason instanceof Error ? settled.reason.message : String(settled.reason)}`;
+          await callbacks.onToolEnd(tu.name, errorMsg);
+          toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: errorMsg });
+        }
       }
     }
 
@@ -158,10 +182,8 @@ export async function runAgentLoop(
       'Agent loop iteration complete',
     );
 
-    // Notify caller of progress so they can update the Discord message
     await callbacks.onProgress?.(iteration + 1, toolCallCount, Date.now() - loopStart);
 
-    // Safety: if we're about to hit the max, ask the AI to wrap up
     if (iteration === maxIterations - 2) {
       workingMessages.push({
         role: 'user',
@@ -179,5 +201,19 @@ export async function runAgentLoop(
     newMessages,
     toolCallCount,
     iterations: newMessages.filter((m) => m.role === 'assistant').length,
+  };
+}
+
+function parseRequestInputPayload(input: Record<string, unknown>): RequestInputPayload {
+  let options: string[] | undefined;
+  if (typeof input.options === 'string') {
+    try {
+      options = JSON.parse(input.options);
+    } catch { /* ignore */ }
+  }
+  return {
+    question: typeof input.question === 'string' ? input.question : 'Please provide input',
+    options,
+    allowFreeText: input.allow_free_text !== false,
   };
 }

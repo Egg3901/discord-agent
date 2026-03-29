@@ -53,12 +53,14 @@ Your text response streams into a single Discord message (edited in place, 2000 
 - \`list_directory(path)\`: List files and subdirectories at a repo path. Use \`""\` for the root. Returns names with file/directory type indicators.
 - \`search_code(query)\`: Search for a plain-text string across all repo files. Returns up to 10 matching file paths with line snippets.
 - \`search_files(pattern)\`: Find files by name or glob pattern (e.g. \`"*.ts"\`, \`"src/**/*.json"\`, \`"*config*"\`). Returns matching paths. Use this instead of recursive \`list_directory\` when you know the filename pattern.
+- \`analyze_code(analysis_type, symbol?, file?)\`: Analyze code structure. Types: "definitions" (find symbol declarations), "references" (find all usages), "imports" (what a file imports), "callers" (what calls a function), "affected" (files impacted by changes). More precise than text search.
 
 Rules for repo tools:
 - Use \`search_files\` to find a file by name pattern instead of recursive \`list_directory\` calls.
 - Use \`read_files_batch\` when you need to read 2+ files — it saves iterations.
 - Always read a file before referencing its contents or writing SEARCH blocks against it.
 - Use \`search_code\` to find where a symbol or pattern is defined, then \`read_file\` to read context.
+- Use \`analyze_code\` for precise code structure queries (call graphs, imports, impact analysis).
 - These tools only work when a repo is attached. If no repo is attached, these tools will fail.`;
   }
 
@@ -68,13 +70,15 @@ Rules for repo tools:
 **Sandbox tools** (persistent file workspace per session):
 - \`run_script(language, code)\`: Execute a script and return stdout/stderr. Supported languages: \`python\`, \`javascript\`, \`typescript\`, \`bash\`, \`sh\`, \`ruby\`, \`perl\`. Files written with \`write_file\` are available to scripts.
 - \`write_file(path, content)\`: Write a file to the sandbox workspace. Subdirectories are created automatically. Files persist across all tool calls in the session.
+- \`edit_file(path, edits)\`: Apply surgical edits to an existing file using SEARCH/REPLACE-style operations. More efficient than rewriting entire files. Use JSON array: \`[{"oldText": "...", "newText": "..."}]\`. Returns a diff preview showing changes.
 - \`read_local_file(path)\`: Read a file from the sandbox workspace. Use to verify written files or read script output.
 - \`list_workspace(path)\`: List files in the sandbox workspace. Use \`""\` for the root.
 
 Rules for sandbox tools:
 - Always run scripts to verify your solutions, not just to demonstrate them.
 - For multi-file projects: use \`write_file\` for each file, then \`run_script\` to build/test.
-- Check \`list_workspace\` if you're unsure what files exist before reading.`;
+- Check \`list_workspace\` if you're unsure what files exist before reading.
+- Use \`edit_file\` for targeted edits to existing files — it's more efficient than \`write_file\` for small changes.`;
   }
 
   if (devToolsEnabled) {
@@ -115,6 +119,20 @@ Rules for dev/git tools:
 Rules for web tools:
 - Use \`web_search\` before answering questions about library versions, recent events, or APIs that may have changed.
 - Always follow up with \`web_fetch\` on the most relevant result before quoting specific content — summaries from search results can be misleading.`;
+  }
+
+  // Interactive tools are available when script execution is enabled
+  if (scriptEnabled) {
+    prompt += `
+
+**Interactive tool** (pause and ask for user input):
+- \`request_input(question, options?, allow_free_text?)\`: Pause the agent and ask the user a clarifying question. Use when requirements are ambiguous, you need approval, or you need input to proceed. If \`options\` is provided, shows as Discord buttons. Returns the user's response.
+
+Rules for interactive tools:
+- Use when you genuinely cannot proceed without clarification — don't ask obvious questions.
+- Provide 2-5 clear options when possible — it speeds up the interaction.
+- Set \`allow_free_text: false\` only when you need a specific choice from the options.
+- The tool waits for user response before continuing — use sparingly to avoid blocking.`;
   }
 
   // Inform the model about disabled features so it can guide users to enable them

@@ -2,6 +2,8 @@ import { RepoFetcher } from '../github/repoFetcher.js';
 import { executeScript, sandboxWriteFile, sandboxReadFile, sandboxListFiles, getSandboxDir } from './scriptExecutor.js';
 import { DevToolExecutor, GIT_TOOL_NAMES, ensureGitWorkspace } from './devToolExecutor.js';
 import { webSearch, webFetch } from './webSearchExecutor.js';
+import { editFile } from './fileEditor.js';
+import { findDefinitions, findReferences, analyzeImports, findCallers, affectedFiles } from './codeAnalyzer.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
@@ -12,6 +14,16 @@ const MAX_SCRIPT_LENGTH = 50_000;
 
 const DEV_TOOL_NAMES = new Set(['run_terminal', 'build_project', ...GIT_TOOL_NAMES]);
 const WEB_TOOL_NAMES = new Set(['web_search', 'web_fetch']);
+const INTERACTIVE_TOOL_NAMES = new Set(['request_input']);
+
+/** Special result type for request_input - signals the agent loop to pause */
+export const REQUEST_INPUT_RESULT = Symbol('REQUEST_INPUT');
+
+export interface RequestInputPayload {
+  question: string;
+  options?: string[];
+  allowFreeText: boolean;
+}
 
 export class ToolExecutor {
   private sandboxDir: string | null = null;
@@ -49,11 +61,20 @@ export class ToolExecutor {
   async execute(
     toolName: string,
     input: Record<string, unknown>,
-  ): Promise<string> {
+  ): Promise<string | typeof REQUEST_INPUT_RESULT> {
     const startTime = Date.now();
     try {
       if (!input || typeof input !== 'object') {
         return 'Error: Invalid tool input';
+      }
+
+      // Route interactive tools (special handling in agent loop)
+      if (INTERACTIVE_TOOL_NAMES.has(toolName)) {
+        // The request_input tool is handled specially by returning a symbol
+        // The agent loop will pause and wait for user input
+        // But the actual execute call returns a string result, so we return
+        // the result directly from agent loop. Here we just validate params.
+        return this.handleRequestInput(input);
       }
 
       // Route dev tools to DevToolExecutor
@@ -93,6 +114,11 @@ export class ToolExecutor {
 
       let result: string;
       switch (toolName) {
+        case 'analyze_code': {
+          if (!this.repoFetcher) return 'Error: No repository attached. Use /repo to attach one.';
+          result = await this.analyzeCode(input);
+          break;
+        }
         case 'read_file': {
           if (!this.repoFetcher) return 'Error: No repository attached. Use /repo to attach one.';
           const path = input.path;
@@ -166,6 +192,23 @@ export class ToolExecutor {
           result = await sandboxWriteFile(path, content, sandbox);
           break;
         }
+        case 'edit_file': {
+          if (!(config as any).ENABLE_SCRIPT_EXECUTION) {
+            return 'Error: edit_file requires script execution to be enabled. An admin can enable it with `/config set ENABLE_SCRIPT_EXECUTION true`.';
+          }
+          const path = input.path;
+          const edits = input.edits;
+          if (typeof path !== 'string' || path.length === 0 || path.length > MAX_PATH_LENGTH) {
+            return 'Error: path must be a non-empty string (max 500 chars)';
+          }
+          if (typeof edits !== 'string' || edits.length === 0) {
+            return 'Error: edits must be a JSON array string';
+          }
+          const sandbox = await this.getSandbox();
+          const editResult = await editFile(path, edits, sandbox);
+          result = editResult.message;
+          break;
+        }
         case 'read_local_file': {
           const path = input.path;
           if (typeof path !== 'string' || path.length === 0 || path.length > MAX_PATH_LENGTH) {
@@ -196,6 +239,53 @@ export class ToolExecutor {
       const duration = Date.now() - startTime;
       logger.warn({ err, toolName, input, duration, owner: this.owner, repo: this.repo }, 'Tool execution failed');
       return `Error: ${message}`;
+    }
+  }
+
+  /**
+   * Handle request_input tool - validates parameters and returns special signal.
+   * The actual user interaction happens in agentLoop.ts which has access to Discord.
+   */
+  private handleRequestInput(input: Record<string, unknown>): typeof REQUEST_INPUT_RESULT {
+    // This is a special tool - the agent loop intercepts it before calling execute()
+    // So this code path shouldn't normally be reached.
+    // But we have it here for completeness and validation.
+    return REQUEST_INPUT_RESULT;
+  }
+
+  private async analyzeCode(input: Record<string, unknown>): Promise<string> {
+    const analysisType = input.analysis_type;
+    const symbol = typeof input.symbol === 'string' ? input.symbol : '';
+    const file = typeof input.file === 'string' ? input.file : '';
+    const includeTests = input.include_tests === true;
+
+    if (!['definitions', 'references', 'imports', 'callers', 'affected'].includes(analysisType as string)) {
+      return 'Error: analysis_type must be one of: definitions, references, imports, callers, affected';
+    }
+
+    switch (analysisType) {
+      case 'definitions': {
+        if (!symbol) return 'Error: symbol parameter is required for definitions analysis';
+        return findDefinitions(this.repoFetcher!, this.owner, this.repo, symbol, includeTests);
+      }
+      case 'references': {
+        if (!symbol) return 'Error: symbol parameter is required for references analysis';
+        return findReferences(this.repoFetcher!, this.owner, this.repo, symbol, includeTests);
+      }
+      case 'imports': {
+        if (!file) return 'Error: file parameter is required for imports analysis';
+        return analyzeImports(this.repoFetcher!, this.owner, this.repo, file);
+      }
+      case 'callers': {
+        if (!symbol) return 'Error: symbol parameter is required for callers analysis';
+        return findCallers(this.repoFetcher!, this.owner, this.repo, symbol, includeTests);
+      }
+      case 'affected': {
+        if (!file) return 'Error: file parameter is required for affected analysis';
+        return affectedFiles(this.repoFetcher!, this.owner, this.repo, file);
+      }
+      default:
+        return `Error: Unknown analysis type: ${analysisType}`;
     }
   }
 

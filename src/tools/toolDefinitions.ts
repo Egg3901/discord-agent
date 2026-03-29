@@ -90,6 +90,33 @@ export const AGENT_TOOLS: ToolDefinition[] = [
       required: ['paths'],
     },
   },
+  {
+    name: 'analyze_code',
+    description:
+      'Analyze code structure: find symbol definitions, locate all references, trace imports/exports, find callers of a function, or identify files affected by changes. More precise than text search for understanding code relationships.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        analysis_type: {
+          type: 'string',
+          description: 'Type of analysis: "definitions" (find where symbol is defined), "references" (find all usages), "imports" (what a file imports), "callers" (what calls this function), "affected" (what files would be impacted by changes to a file)',
+        },
+        symbol: {
+          type: 'string',
+          description: 'Symbol name to analyze (function, class, variable, type) - used for definitions, references, and callers',
+        },
+        file: {
+          type: 'string',
+          description: 'File path to analyze - used for imports and affected analysis',
+        },
+        include_tests: {
+          type: 'boolean',
+          description: 'Include test files in results (default: false)',
+        },
+      },
+      required: ['analysis_type'],
+    },
+  },
 ];
 
 /**
@@ -134,6 +161,25 @@ export const SANDBOX_TOOLS: ToolDefinition[] = [
         },
       },
       required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'edit_file',
+    description:
+      'Apply surgical edits to an existing file using SEARCH/REPLACE blocks. More efficient than rewriting entire files for targeted changes. Returns a unified diff preview showing what changed. Use this for single-line or multi-line edits to existing files.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'File path relative to the workspace root',
+        },
+        edits: {
+          type: 'string',
+          description: 'JSON array of edit operations. Each edit is {"oldText": "...", "newText": "..."}. newText can be empty for deletion. All edits apply atomically.',
+        },
+      },
+      required: ['path', 'edits'],
     },
   },
   {
@@ -396,6 +442,36 @@ export const WEB_TOOLS: ToolDefinition[] = [
         },
       },
       required: ['url'],
+    },
+  },
+];
+
+/**
+ * Interactive input tool for clarification prompts.
+ * Available when ENABLE_SCRIPT_EXECUTION is true (sandbox tools enabled).
+ */
+export const INTERACTIVE_TOOLS: ToolDefinition[] = [
+  {
+    name: 'request_input',
+    description:
+      'Pause the agent and ask the user a clarifying question. Use when requirements are ambiguous, you need approval for destructive actions, or you need user input to proceed. The agent will wait for the user\'s response and resume with that response as the tool result.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        question: {
+          type: 'string',
+          description: 'The question to ask the user (max 1900 characters)',
+        },
+        options: {
+          type: 'string',
+          description: 'JSON array of predefined choice strings (e.g. \'["Option A", "Option B"]\'). If provided, shows as Discord buttons instead of free text.',
+        },
+        allow_free_text: {
+          type: 'boolean',
+          description: 'Allow free-form text response in addition to predefined options (default: true)',
+        },
+      },
+      required: ['question'],
     },
   },
 ];
