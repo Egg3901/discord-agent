@@ -1,6 +1,6 @@
 import { RepoFetcher } from '../github/repoFetcher.js';
 import { executeScript, sandboxWriteFile, sandboxReadFile, sandboxListFiles, getSandboxDir } from './scriptExecutor.js';
-import { DevToolExecutor, GIT_TOOL_NAMES, WORKSPACE_TOOL_NAMES, ensureGitWorkspace } from './devToolExecutor.js';
+import { DevToolExecutor, GIT_TOOL_NAMES, WORKSPACE_TOOL_NAMES, ADVANCED_TOOL_NAMES, ensureGitWorkspace } from './devToolExecutor.js';
 import { webSearch, webFetch } from './webSearchExecutor.js';
 import { editFile } from './fileEditor.js';
 import { findDefinitions, findReferences, analyzeImports, findCallers, affectedFiles } from './codeAnalyzer.js';
@@ -12,7 +12,7 @@ const MAX_PATH_LENGTH = 500;
 const MAX_QUERY_LENGTH = 200;
 const MAX_SCRIPT_LENGTH = 50_000;
 
-const DEV_TOOL_NAMES = new Set(['run_terminal', 'build_project', ...GIT_TOOL_NAMES, ...WORKSPACE_TOOL_NAMES]);
+const DEV_TOOL_NAMES = new Set(['run_terminal', 'build_project', ...GIT_TOOL_NAMES, ...WORKSPACE_TOOL_NAMES, ...ADVANCED_TOOL_NAMES]);
 const WEB_TOOL_NAMES = new Set(['web_search', 'web_fetch']);
 const INTERACTIVE_TOOL_NAMES = new Set(['request_input']);
 const GITHUB_TOOL_NAMES = new Set(['create_pr', 'read_github_issue', 'create_github_issue']);

@@ -116,7 +116,19 @@ Rules for dev/git tools:
 - Use \`run_terminal\` for one-off commands, dependency installation, or anything not covered by the specific tools above.
 - Use \`patch_file\` for targeted file edits in the cloned repo — not \`run_terminal\` with sed/awk.
 - Pushing to GitHub remotes requires GITHUB_TOKEN to be configured by the bot admin.
-- **Proactive workflow:** When you finish making changes, proactively run tests (\`build_project("test")\`) to verify your work. If tests fail, analyze the output and fix the issues without being asked. When everything passes, offer to commit, push, and create a PR.`;
+- **Proactive workflow:** When you finish making changes, proactively run \`run_tests\` to verify your work. If tests fail, analyze the structured output, fix the issues, and re-run without being asked. When everything passes, offer to commit, push, and create a PR.
+
+**Advanced tools** (API testing, bulk operations, downloads):
+- \`http_request(url, method?, headers?, body?)\`: Make HTTP requests to test APIs. Returns status, headers, and body. Supports GET/POST/PUT/PATCH/DELETE. Pass headers as JSON string. 30s timeout.
+- \`find_replace_all(search, replace, glob?, is_regex?)\`: Bulk search and replace across files. By default exact string match. Set \`is_regex: true\` for regex with capture groups (\$1, \$2). \`glob\` filters files (e.g. \`"**/*.ts"\`). Returns change summary per file.
+- \`download_file(url, path)\`: Download a file from URL into the workspace (max 10MB). Use for remote configs, schemas, datasets. Parent dirs auto-created.
+- \`run_tests(file?, grep?)\`: Run tests with structured output. Auto-detects vitest/jest/pytest/go/cargo. Returns pass/fail counts and failure details. \`file\` runs specific test file. \`grep\` filters by test name pattern. Use this instead of \`build_project("test")\` for better results.
+
+Rules for advanced tools:
+- Use \`run_tests\` instead of \`build_project("test")\` — it gives you structured pass/fail/skip counts and failure details.
+- Use \`http_request\` for testing APIs. Don't use \`run_terminal\` with curl unless you need specific curl features.
+- Use \`find_replace_all\` for renaming symbols across files. It's faster and safer than multiple \`patch_file\` calls.
+- When tests fail, read the failure details from \`run_tests\` output, fix the code with \`patch_file\`, and re-run \`run_tests\` to verify.`;
   }
 
   if (webSearchEnabled) {

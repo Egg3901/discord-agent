@@ -14,7 +14,7 @@ type SendableChannel = { send: (options: any) => Promise<Message> };
 
 /** Tool names that indicate file modifications. */
 const WRITE_TOOLS = new Set([
-  'write_file', 'edit_file', 'run_script',
+  'write_file', 'edit_file', 'run_script', 'patch_file', 'find_replace_all', 'download_file',
   'git_commit', 'git_add', 'git_push',
   'Write', 'Edit', 'MultiEdit', 'Bash',
 ]);
@@ -34,7 +34,7 @@ const GIT_TOOLS = new Set([
 
 /** Tool names that indicate test/build. */
 const BUILD_TOOLS = new Set([
-  'build_project', 'run_terminal',
+  'build_project', 'run_terminal', 'run_tests',
   'Bash',
 ]);
 

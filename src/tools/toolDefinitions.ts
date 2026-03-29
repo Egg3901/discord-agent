@@ -545,6 +545,105 @@ export const WORKSPACE_TOOLS: ToolDefinition[] = [
 ];
 
 /**
+ * Advanced tools for API testing, bulk edits, file downloads, and test execution.
+ * Available when ENABLE_DEV_TOOLS is true.
+ */
+export const ADVANCED_TOOLS: ToolDefinition[] = [
+  {
+    name: 'http_request',
+    description:
+      'Make an HTTP request to test an API endpoint. Supports all methods, custom headers, and request bodies. Returns status code, headers, and response body. Use for testing REST APIs, webhooks, health checks, or verifying deployed services.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Full URL including protocol (e.g. "http://localhost:3000/api/users", "https://api.example.com/v1/items").',
+        },
+        method: {
+          type: 'string',
+          description: 'HTTP method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS). Defaults to GET.',
+        },
+        headers: {
+          type: 'string',
+          description: 'JSON object of request headers (e.g. \'{"Content-Type": "application/json", "Authorization": "Bearer token"}\').',
+        },
+        body: {
+          type: 'string',
+          description: 'Request body. For JSON APIs, pass the JSON string directly. For form data, use URL-encoded format.',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'find_replace_all',
+    description:
+      'Find and replace text across multiple files in the git workspace. Performs a bulk search-and-replace operation using exact string matching or regex. Returns a summary of all changes made with file paths and match counts. Use for renaming variables, updating imports, or bulk refactoring.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        search: {
+          type: 'string',
+          description: 'Text or regex pattern to find. Use plain text for exact matches.',
+        },
+        replace: {
+          type: 'string',
+          description: 'Replacement text. Supports regex capture groups ($1, $2) when using regex.',
+        },
+        glob: {
+          type: 'string',
+          description: 'Glob pattern to filter files (e.g. "**/*.ts", "src/**/*.js"). Defaults to all files.',
+        },
+        is_regex: {
+          type: 'boolean',
+          description: 'Treat search as regex pattern (default: false, exact string match).',
+        },
+      },
+      required: ['search', 'replace'],
+    },
+  },
+  {
+    name: 'download_file',
+    description:
+      'Download a file from a URL into the git workspace. Use for fetching remote configs, datasets, schemas, or dependency files. Supports binary and text files up to 10MB.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'URL to download from (must start with http:// or https://).',
+        },
+        path: {
+          type: 'string',
+          description: 'Destination path relative to workspace root (e.g. "data/schema.json", "scripts/setup.sh"). Parent directories are created automatically.',
+        },
+      },
+      required: ['url', 'path'],
+    },
+  },
+  {
+    name: 'run_tests',
+    description:
+      'Run tests with structured output parsing. Auto-detects the test framework and returns a structured summary: total, passed, failed, skipped counts plus details of each failing test (name, file, error message). Can run all tests or a specific file/pattern. More useful than build_project("test") because it parses results.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          description: 'Optional: specific test file or pattern to run (e.g. "tests/auth.test.ts", "test_*.py"). Omit to run all tests.',
+        },
+        grep: {
+          type: 'string',
+          description: 'Optional: filter by test name pattern (e.g. "login", "should handle errors").',
+        },
+      },
+      required: [],
+    },
+  },
+];
+
+/**
  * Interactive input tool for clarification prompts.
  * Available when ENABLE_SCRIPT_EXECUTION is true (sandbox tools enabled).
  */

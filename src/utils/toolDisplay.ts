@@ -35,6 +35,10 @@ export const TOOL_EMOJIS: Record<string, string> = {
   read_github_issue: '\u{1F4CB}',
   create_github_issue: '\u{1F4DD}',
   request_input: '\u{2753}',
+  http_request: '\u{1F310}',
+  find_replace_all: '\u{1F504}',
+  download_file: '\u{2B07}\uFE0F',
+  run_tests: '\u{1F9EA}',
 };
 
 /** Human-readable label per tool name */
@@ -69,6 +73,10 @@ export const TOOL_LABELS: Record<string, string> = {
   read_github_issue: 'Reading issue',
   create_github_issue: 'Creating issue',
   request_input: 'Asking user',
+  http_request: 'HTTP request',
+  find_replace_all: 'Find & replace',
+  download_file: 'Downloading',
+  run_tests: 'Running tests',
 };
 
 /**
@@ -131,6 +139,14 @@ export function formatToolDetail(name: string, input: Record<string, unknown>): 
       return input.title ? `"${String(input.title).slice(0, 60)}"` : '';
     case 'request_input':
       return input.question ? `"${String(input.question).slice(0, 60)}"` : '';
+    case 'http_request':
+      return input.url ? `${String(input.method || 'GET')} \`${String(input.url).slice(0, 60)}\`` : '';
+    case 'find_replace_all':
+      return input.search ? `\`${String(input.search).slice(0, 40)}\` → \`${String(input.replace || '').slice(0, 40)}\`` : '';
+    case 'download_file':
+      return input.path ? `→ \`${String(input.path)}\`` : '';
+    case 'run_tests':
+      return input.file ? `\`${String(input.file).slice(0, 60)}\`` : 'all tests';
     default:
       return '';
   }
