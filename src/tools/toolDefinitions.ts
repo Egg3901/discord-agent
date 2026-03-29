@@ -447,6 +447,104 @@ export const WEB_TOOLS: ToolDefinition[] = [
 ];
 
 /**
+ * GitHub tools for issue/PR workflow.
+ * Available when ENABLE_DEV_TOOLS is true and GITHUB_TOKEN is set.
+ */
+export const GITHUB_TOOLS: ToolDefinition[] = [
+  {
+    name: 'create_pr',
+    description:
+      'Create a GitHub pull request from the current branch. Requires changes to be committed and pushed first. Automatically generates a title from the branch name if not provided. Use after git_push to complete the workflow.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'PR title. If omitted, auto-generated from branch name.',
+        },
+        body: {
+          type: 'string',
+          description: 'PR description in markdown. Summarize what changed and why.',
+        },
+        base: {
+          type: 'string',
+          description: 'Base branch to merge into (default: "main"). Use "master" or other branch names if needed.',
+        },
+        draft: {
+          type: 'boolean',
+          description: 'Create as draft PR (default: false).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'read_github_issue',
+    description:
+      'Read a GitHub issue to understand requirements, bug reports, or feature requests before writing code. Returns the issue title, body, labels, assignees, and comments. Use this to understand what needs to be done.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        issue: {
+          type: 'string',
+          description: 'Issue reference: number (e.g. "42"), URL (https://github.com/owner/repo/issues/42), or owner/repo#42.',
+        },
+      },
+      required: ['issue'],
+    },
+  },
+  {
+    name: 'create_github_issue',
+    description:
+      'Create a new GitHub issue for tracking bugs, TODO items, or follow-up work discovered during a coding session. Returns the created issue URL.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Issue title (concise summary of the problem or task).',
+        },
+        body: {
+          type: 'string',
+          description: 'Issue body in markdown. Include context, reproduction steps for bugs, or acceptance criteria for features.',
+        },
+        labels: {
+          type: 'string',
+          description: 'Comma-separated label names (e.g. "bug,high-priority"). Labels must already exist in the repo.',
+        },
+      },
+      required: ['title'],
+    },
+  },
+];
+
+/**
+ * Workspace file editing tool for surgical edits in the dev workspace (cloned repo).
+ * Available when ENABLE_DEV_TOOLS is true.
+ */
+export const WORKSPACE_TOOLS: ToolDefinition[] = [
+  {
+    name: 'patch_file',
+    description:
+      'Apply surgical SEARCH/REPLACE edits to a file in the git workspace (cloned repository). Unlike edit_file which works in the sandbox, this tool modifies files in the actual cloned repo so changes appear in git_status and can be committed. Returns a unified diff preview.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'File path relative to the workspace root (e.g. "src/index.ts").',
+        },
+        edits: {
+          type: 'string',
+          description: 'JSON array of edit operations. Each edit is {"oldText": "exact text to find", "newText": "replacement text"}. All edits apply atomically.',
+        },
+      },
+      required: ['path', 'edits'],
+    },
+  },
+];
+
+/**
  * Interactive input tool for clarification prompts.
  * Available when ENABLE_SCRIPT_EXECUTION is true (sandbox tools enabled).
  */

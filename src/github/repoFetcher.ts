@@ -283,6 +283,83 @@ export class RepoFetcher {
    * Fetch a pull request's metadata and diff for code review.
    * Returns a formatted string with PR details, description, and file diffs (truncated).
    */
+  async createPR(
+    owner: string,
+    repo: string,
+    head: string,
+    base: string,
+    title: string,
+    body?: string,
+    draft?: boolean,
+  ): Promise<{ url: string; number: number }> {
+    const { data: pr } = await this.octokit.pulls.create({
+      owner,
+      repo,
+      head,
+      base,
+      title,
+      body: body || '',
+      draft: draft || false,
+    });
+    return { url: pr.html_url, number: pr.number };
+  }
+
+  async readIssue(owner: string, repo: string, issueNumber: number): Promise<string> {
+    const { data: issue } = await this.octokit.issues.get({ owner, repo, issue_number: issueNumber });
+
+    const sections: string[] = [];
+    sections.push(`## Issue #${issueNumber}: ${issue.title}`);
+    sections.push(`**State:** ${issue.state} | **Author:** ${issue.user?.login}`);
+    if (issue.labels.length > 0) {
+      const labelNames = issue.labels.map((l: any) => typeof l === 'string' ? l : l.name).join(', ');
+      sections.push(`**Labels:** ${labelNames}`);
+    }
+    if (issue.assignees && issue.assignees.length > 0) {
+      sections.push(`**Assignees:** ${issue.assignees.map((a: any) => a.login).join(', ')}`);
+    }
+    sections.push(`**URL:** ${issue.html_url}`);
+
+    if (issue.body?.trim()) {
+      sections.push(`\n### Description\n${issue.body.trim()}`);
+    }
+
+    // Fetch comments (up to 30)
+    try {
+      const { data: comments } = await this.octokit.issues.listComments({
+        owner,
+        repo,
+        issue_number: issueNumber,
+        per_page: 30,
+      });
+      if (comments.length > 0) {
+        sections.push(`\n### Comments (${comments.length})`);
+        for (const c of comments) {
+          const body = (c.body || '').slice(0, 2000);
+          sections.push(`\n**${c.user?.login}** (<t:${Math.floor(new Date(c.created_at).getTime() / 1000)}:R>):\n${body}`);
+        }
+      }
+    } catch { /* non-fatal */ }
+
+    return sections.join('\n');
+  }
+
+  async createIssue(
+    owner: string,
+    repo: string,
+    title: string,
+    body?: string,
+    labels?: string[],
+  ): Promise<{ url: string; number: number }> {
+    const { data: issue } = await this.octokit.issues.create({
+      owner,
+      repo,
+      title,
+      body: body || '',
+      labels: labels || [],
+    });
+    return { url: issue.html_url, number: issue.number };
+  }
+
   async fetchPR(owner: string, repo: string, prNumber: number): Promise<string> {
     const MAX_DIFF_SIZE = 40_000; // 40KB diff limit for context window
 

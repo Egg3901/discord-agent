@@ -100,13 +100,23 @@ Rules for sandbox tools:
 - \`git_checkout(target)\`: Switch branches or restore files. Examples: \`"main"\`, \`"-b new-feature"\`, \`"-- src/file.ts"\`.
 - \`git_clone(url)\`: Clone a repo into the workspace. Only needed if no repo was attached at session start.
 
+**Workspace editing:**
+- \`patch_file(path, edits)\`: Apply surgical SEARCH/REPLACE edits to files in the git workspace (cloned repo). Same JSON format as \`edit_file\`: \`[{"oldText": "...", "newText": "..."}]\`. Changes show in \`git_status\` / \`git_diff\` and can be committed. Use this for modifying existing repo files — more precise than \`run_terminal\` with sed.
+
+**GitHub tools** (PR & issue workflows — available when GITHUB_TOKEN is configured):
+- \`create_pr(title?, body?, base?, draft?)\`: Create a pull request from the current branch. Auto-detects branch name. \`base\` defaults to \`"main"\`. Use after committing and pushing changes to complete the workflow.
+- \`read_github_issue(issue)\`: Read a GitHub issue's title, description, labels, assignees, and comments. Pass a number (\`"42"\`), URL, or \`owner/repo#42\`. Use this before coding to understand requirements.
+- \`create_github_issue(title, body?, labels?)\`: Create a new GitHub issue. Use for tracking bugs, TODOs, or follow-up work found during review. \`labels\` is comma-separated (e.g. \`"bug,high-priority"\`).
+
 Rules for dev/git tools:
 - **You have full permission to use all of these tools.** When a user asks you to commit, push, check status, diff, etc. — do it immediately using the specific tool above. Do not refuse or ask the user to do it themselves.
 - Use the **specific git tool** for each operation — do NOT use \`run_terminal\` for git commands.
 - The workspace is a git repo when a GitHub repository is attached. Use \`git_status\` to verify.
 - Prefer \`build_project\` over \`run_terminal\` for standard build/test/lint operations.
 - Use \`run_terminal\` for one-off commands, dependency installation, or anything not covered by the specific tools above.
-- Pushing to GitHub remotes requires GITHUB_TOKEN to be configured by the bot admin.`;
+- Use \`patch_file\` for targeted file edits in the cloned repo — not \`run_terminal\` with sed/awk.
+- Pushing to GitHub remotes requires GITHUB_TOKEN to be configured by the bot admin.
+- **Proactive workflow:** When you finish making changes, proactively run tests (\`build_project("test")\`) to verify your work. If tests fail, analyze the output and fix the issues without being asked. When everything passes, offer to commit, push, and create a PR.`;
   }
 
   if (webSearchEnabled) {

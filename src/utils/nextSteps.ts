@@ -29,6 +29,7 @@ const READ_TOOLS = new Set([
 /** Tool names that indicate git operations. */
 const GIT_TOOLS = new Set([
   'git_status', 'git_diff', 'git_log', 'git_add', 'git_commit', 'git_push',
+  'create_pr',
 ]);
 
 /** Tool names that indicate test/build. */

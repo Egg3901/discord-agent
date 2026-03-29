@@ -6,7 +6,7 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
 import { buildSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
-import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, GIT_TOOLS, WEB_TOOLS, toGeminiFunctionDeclarations, toOpenAITools } from '../tools/toolDefinitions.js';
+import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, GIT_TOOLS, WEB_TOOLS, GITHUB_TOOLS, WORKSPACE_TOOLS, toGeminiFunctionDeclarations, toOpenAITools } from '../tools/toolDefinitions.js';
 import { getSandboxDir } from '../tools/scriptExecutor.js';
 import { ensureGitWorkspace } from '../tools/devToolExecutor.js';
 import { saveClaudeCodeSession, loadClaudeCodeSessionMap } from '../storage/database.js';
@@ -131,6 +131,10 @@ function getActiveTools(options: StreamOptions): import('../tools/toolDefinition
   if (config.ENABLE_DEV_TOOLS) {
     tools.push(...DEV_TOOLS);
     tools.push(...GIT_TOOLS);
+    tools.push(...WORKSPACE_TOOLS);
+    if (config.GITHUB_TOKEN) {
+      tools.push(...GITHUB_TOOLS);
+    }
   }
   if (options.enableWebSearch) {
     tools.push(...WEB_TOOLS);

@@ -28,6 +28,13 @@ export const TOOL_EMOJIS: Record<string, string> = {
   build_project: '\u{1F3D7}\uFE0F',
   web_search: '\u{1F310}',
   web_fetch: '\u{1F310}',
+  patch_file: '\u{1FA79}',
+  edit_file: '\u{270F}\uFE0F',
+  analyze_code: '\u{1F9EC}',
+  create_pr: '\u{1F4E4}',
+  read_github_issue: '\u{1F4CB}',
+  create_github_issue: '\u{1F4DD}',
+  request_input: '\u{2753}',
 };
 
 /** Human-readable label per tool name */
@@ -55,6 +62,13 @@ export const TOOL_LABELS: Record<string, string> = {
   build_project: 'Building',
   web_search: 'Searching web',
   web_fetch: 'Fetching',
+  patch_file: 'Patching',
+  edit_file: 'Editing',
+  analyze_code: 'Analyzing',
+  create_pr: 'Creating PR',
+  read_github_issue: 'Reading issue',
+  create_github_issue: 'Creating issue',
+  request_input: 'Asking user',
 };
 
 /**
@@ -104,6 +118,19 @@ export function formatToolDetail(name: string, input: Record<string, unknown>): 
       return input.query ? `\`${String(input.query).slice(0, 60)}\`` : '';
     case 'web_fetch':
       return input.url ? `\`${String(input.url).slice(0, 80)}\`` : '';
+    case 'patch_file':
+    case 'edit_file':
+      return input.path ? `\`${String(input.path)}\`` : '';
+    case 'analyze_code':
+      return input.symbol ? `\`${String(input.symbol)}\` (${String(input.analysis_type || 'analyze')})` : (input.file ? `\`${String(input.file)}\`` : '');
+    case 'create_pr':
+      return input.title ? `"${String(input.title).slice(0, 60)}"` : '';
+    case 'read_github_issue':
+      return input.issue ? `#${String(input.issue)}` : '';
+    case 'create_github_issue':
+      return input.title ? `"${String(input.title).slice(0, 60)}"` : '';
+    case 'request_input':
+      return input.question ? `"${String(input.question).slice(0, 60)}"` : '';
     default:
       return '';
   }

@@ -1,6 +1,6 @@
 import { RepoFetcher } from '../github/repoFetcher.js';
 import { executeScript, sandboxWriteFile, sandboxReadFile, sandboxListFiles, getSandboxDir } from './scriptExecutor.js';
-import { DevToolExecutor, GIT_TOOL_NAMES, ensureGitWorkspace } from './devToolExecutor.js';
+import { DevToolExecutor, GIT_TOOL_NAMES, WORKSPACE_TOOL_NAMES, ensureGitWorkspace } from './devToolExecutor.js';
 import { webSearch, webFetch } from './webSearchExecutor.js';
 import { editFile } from './fileEditor.js';
 import { findDefinitions, findReferences, analyzeImports, findCallers, affectedFiles } from './codeAnalyzer.js';
@@ -12,9 +12,10 @@ const MAX_PATH_LENGTH = 500;
 const MAX_QUERY_LENGTH = 200;
 const MAX_SCRIPT_LENGTH = 50_000;
 
-const DEV_TOOL_NAMES = new Set(['run_terminal', 'build_project', ...GIT_TOOL_NAMES]);
+const DEV_TOOL_NAMES = new Set(['run_terminal', 'build_project', ...GIT_TOOL_NAMES, ...WORKSPACE_TOOL_NAMES]);
 const WEB_TOOL_NAMES = new Set(['web_search', 'web_fetch']);
 const INTERACTIVE_TOOL_NAMES = new Set(['request_input']);
+const GITHUB_TOOL_NAMES = new Set(['create_pr', 'read_github_issue', 'create_github_issue']);
 
 /** Special result type for request_input - signals the agent loop to pause */
 export const REQUEST_INPUT_RESULT = Symbol('REQUEST_INPUT');
@@ -109,6 +110,20 @@ export class ToolExecutor {
         }
         const duration = Date.now() - startTime;
         logger.debug({ toolName, duration }, 'Web tool executed');
+        return result;
+      }
+
+      // Route GitHub tools (create_pr, read_github_issue, create_github_issue)
+      if (GITHUB_TOOL_NAMES.has(toolName)) {
+        if (!config.GITHUB_TOKEN) {
+          return 'Error: GITHUB_TOKEN is required for GitHub tools. An admin can set it with `/admin setgittoken`.';
+        }
+        if (!config.ENABLE_DEV_TOOLS) {
+          return 'Error: GitHub tools require dev tools to be enabled. An admin can enable them with `/config set ENABLE_DEV_TOOLS true`.';
+        }
+        const result = await this.executeGithubTool(toolName, input);
+        const duration = Date.now() - startTime;
+        logger.debug({ toolName, duration }, 'GitHub tool executed');
         return result;
       }
 
@@ -251,6 +266,107 @@ export class ToolExecutor {
     // So this code path shouldn't normally be reached.
     // But we have it here for completeness and validation.
     return REQUEST_INPUT_RESULT;
+  }
+
+  private async executeGithubTool(toolName: string, input: Record<string, unknown>): Promise<string> {
+    if (!this.repoFetcher) {
+      return 'Error: No repository attached. Use /repo to attach one.';
+    }
+
+    switch (toolName) {
+      case 'create_pr': {
+        // Determine current branch from workspace
+        const sandbox = await this.getSandbox();
+        const { execSync } = await import('node:child_process');
+        let head: string;
+        try {
+          head = execSync('git rev-parse --abbrev-ref HEAD', { cwd: sandbox, encoding: 'utf-8', timeout: 5000 }).trim();
+        } catch {
+          return 'Error: Could not determine current branch. Make sure you are in a git repository with commits.';
+        }
+
+        const base = (typeof input.base === 'string' && input.base) ? input.base : 'main';
+        const title = (typeof input.title === 'string' && input.title) ? input.title : head.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const body = typeof input.body === 'string' ? input.body : '';
+        const draft = input.draft === true;
+
+        if (head === base) {
+          return `Error: Current branch "${head}" is the same as base "${base}". Create a feature branch, commit changes, and push before creating a PR.`;
+        }
+
+        try {
+          const result = await this.repoFetcher.createPR(this.owner, this.repo, head, base, title, body, draft);
+          return `PR created successfully!\n**PR #${result.number}:** ${title}\n**URL:** ${result.url}`;
+        } catch (err: any) {
+          const msg = err.message || String(err);
+          if (msg.includes('already exists')) {
+            return `Error: A pull request already exists for branch "${head}" → "${base}". ${msg}`;
+          }
+          return `Error creating PR: ${msg}`;
+        }
+      }
+
+      case 'read_github_issue': {
+        const issueRef = input.issue;
+        if (typeof issueRef !== 'string' || issueRef.length === 0) {
+          return 'Error: issue must be a non-empty string (number, URL, or owner/repo#N)';
+        }
+
+        const parsed = this.parseIssueRef(issueRef);
+        if (!parsed) {
+          return 'Error: Invalid issue format. Use a number (42), URL (https://github.com/owner/repo/issues/42), or owner/repo#42.';
+        }
+
+        try {
+          return await this.repoFetcher.readIssue(parsed.owner, parsed.repo, parsed.number);
+        } catch (err: any) {
+          return `Error reading issue: ${err.message || String(err)}`;
+        }
+      }
+
+      case 'create_github_issue': {
+        const title = input.title;
+        if (typeof title !== 'string' || title.length === 0) {
+          return 'Error: title must be a non-empty string';
+        }
+        const body = typeof input.body === 'string' ? input.body : undefined;
+        const labels = typeof input.labels === 'string'
+          ? input.labels.split(',').map((l: string) => l.trim()).filter(Boolean)
+          : undefined;
+
+        try {
+          const result = await this.repoFetcher.createIssue(this.owner, this.repo, title, body, labels);
+          return `Issue created successfully!\n**Issue #${result.number}:** ${title}\n**URL:** ${result.url}`;
+        } catch (err: any) {
+          return `Error creating issue: ${err.message || String(err)}`;
+        }
+      }
+
+      default:
+        return `Unknown GitHub tool: ${toolName}`;
+    }
+  }
+
+  private parseIssueRef(ref: string): { owner: string; repo: string; number: number } | null {
+    // Number only: use session repo
+    const numMatch = ref.match(/^(\d+)$/);
+    if (numMatch) {
+      return { owner: this.owner, repo: this.repo, number: parseInt(numMatch[1], 10) };
+    }
+
+    // URL: https://github.com/owner/repo/issues/42
+    const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
+    if (urlMatch) {
+      return { owner: urlMatch[1], repo: urlMatch[2], number: parseInt(urlMatch[3], 10) };
+    }
+
+    // Short: owner/repo#42
+    const shortMatch = ref.match(/^([^/]+)\/([^#]+)#(\d+)$/);
+    if (shortMatch) {
+      return { owner: shortMatch[1], repo: shortMatch[2], number: parseInt(shortMatch[3], 10) };
+    }
+
+    return null;
   }
 
   private async analyzeCode(input: Record<string, unknown>): Promise<string> {

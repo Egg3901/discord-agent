@@ -31,6 +31,8 @@ export const GIT_TOOL_NAMES = new Set([
   'git_push', 'git_pull', 'git_branch', 'git_checkout', 'git_clone',
 ]);
 
+export const WORKSPACE_TOOL_NAMES = new Set(['patch_file']);
+
 /**
  * Execute dev tools (terminal, git, build) in the session workspace.
  */
@@ -41,6 +43,9 @@ export class DevToolExecutor {
     if (GIT_TOOL_NAMES.has(toolName)) {
       return this.gitTool(toolName, input);
     }
+    if (WORKSPACE_TOOL_NAMES.has(toolName)) {
+      return this.workspaceTool(toolName, input);
+    }
     switch (toolName) {
       case 'run_terminal':
         return this.runTerminal(input);
@@ -49,6 +54,39 @@ export class DevToolExecutor {
       default:
         return `Unknown dev tool: ${toolName}`;
     }
+  }
+
+  /**
+   * Handle workspace file operations (patch_file).
+   */
+  private async workspaceTool(toolName: string, input: Record<string, unknown>): Promise<string> {
+    if (toolName === 'patch_file') {
+      return this.patchFile(input);
+    }
+    return `Unknown workspace tool: ${toolName}`;
+  }
+
+  /**
+   * Apply surgical SEARCH/REPLACE edits to a file in the git workspace.
+   */
+  private async patchFile(input: Record<string, unknown>): Promise<string> {
+    const path = input.path;
+    const editsStr = input.edits;
+    if (typeof path !== 'string' || path.length === 0) {
+      return 'Error: path must be a non-empty string';
+    }
+    if (typeof editsStr !== 'string' || editsStr.length === 0) {
+      return 'Error: edits must be a JSON array string';
+    }
+
+    // Prevent path traversal
+    if (path.includes('..') || path.startsWith('/')) {
+      return 'Error: path must be relative and cannot contain ".."';
+    }
+
+    const { editFile } = await import('./fileEditor.js');
+    const result = await editFile(path, editsStr, this.sandboxDir);
+    return result.message;
   }
 
   private async runTerminal(input: Record<string, unknown>): Promise<string> {
