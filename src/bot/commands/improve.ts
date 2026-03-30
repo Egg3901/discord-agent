@@ -20,6 +20,23 @@ Guidelines for improving prompts:
 
 Return ONLY the improved prompt as plain text. Do not include any explanations, formatting, or markdown.`;
 
+/**
+ * Generate an improved version of a prompt using AI.
+ * Used by /code command for the prompt improvement flow.
+ */
+export async function generateImprovedPrompt(aiClient: AIClient, prompt: string): Promise<string> {
+  const messages = [
+    {
+      role: 'user' as const,
+      content: `${IMPROVE_PROMPT_SYSTEM}\n\nHere is the prompt to improve:\n${prompt}`,
+    },
+  ];
+  return aiClient.getResponse(messages, {
+    modelOverride: 'claude-sonnet-4-6',
+    enableTools: false,
+  });
+}
+
 export function createImproveCommand(aiClient: AIClient, rateLimiter: RateLimiter): CommandHandler {
   return {
     data: new SlashCommandBuilder()
@@ -56,8 +73,7 @@ export function createImproveCommand(aiClient: AIClient, rateLimiter: RateLimite
         
         // Create messages array with our improvement system prompt
         const messages = [
-          { role: 'system' as const, content: IMPROVE_PROMPT_SYSTEM },
-          { role: 'user' as const, content: originalPrompt },
+          { role: 'user' as const, content: `${IMPROVE_PROMPT_SYSTEM}\n\nHere is the prompt to improve:\n${originalPrompt}` },
         ];
 
         // Get the improved prompt from the AI
