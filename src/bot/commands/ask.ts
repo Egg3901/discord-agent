@@ -7,6 +7,7 @@ import { RateLimiter } from '../middleware/rateLimiter.js';
 import { formatApiError } from '../../utils/errors.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { logUsage } from '../../storage/database.js';
+import { rateLimitEmbed } from '../../utils/embedHelpers.js';
 import { logger } from '../../utils/logger.js';
 import { config } from '../../config.js';
 import { nanoid } from 'nanoid';
@@ -36,7 +37,7 @@ export function createAskCommand(
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null)) {
+      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
         await interaction.reply({
           content: 'You do not have a role that allows using this bot.',
           ephemeral: true,
@@ -46,7 +47,7 @@ export function createAskCommand(
 
       if (!rateLimiter.check(interaction.user.id)) {
         await interaction.reply({
-          content: 'Rate limit exceeded. Please wait a moment.',
+          embeds: [rateLimitEmbed(rateLimiter.getInfo(interaction.user.id))],
           ephemeral: true,
         });
         return;

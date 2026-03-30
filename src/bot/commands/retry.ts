@@ -11,6 +11,7 @@ import { isAllowed } from '../middleware/permissions.js';
 import { formatApiError } from '../../utils/errors.js';
 import { config } from '../../config.js';
 import { logger } from '../../utils/logger.js';
+import { rateLimitEmbed } from '../../utils/embedHelpers.js';
 import type { CommandHandler } from './types.js';
 
 export function createRetryCommand(
@@ -25,13 +26,13 @@ export function createRetryCommand(
 
     async execute(interaction: ChatInputCommandInteraction) {
       try {
-        if (!isAllowed(interaction.member as GuildMember | null)) {
+        if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
           await interaction.reply({ content: 'You do not have a role that allows using this bot.', ephemeral: true });
           return;
         }
 
         if (!rateLimiter.check(interaction.user.id)) {
-          await interaction.reply({ content: 'Rate limit exceeded. Please wait a moment.', ephemeral: true });
+          await interaction.reply({ embeds: [rateLimitEmbed(rateLimiter.getInfo(interaction.user.id))], ephemeral: true });
           return;
         }
 

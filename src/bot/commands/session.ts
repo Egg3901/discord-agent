@@ -1,5 +1,6 @@
 import {
   SlashCommandBuilder,
+  EmbedBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
@@ -7,6 +8,7 @@ import { SessionManager } from '../../sessions/sessionManager.js';
 import type { AIClient } from '../../claude/aiClient.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { formatApiError } from '../../utils/errors.js';
+import { BotColors, formatDuration } from '../../utils/embedHelpers.js';
 import type { CommandHandler } from './types.js';
 
 export function createSessionCommand(
@@ -28,7 +30,7 @@ export function createSessionCommand(
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null)) {
+      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
         await interaction.reply({
           content: 'You do not have a role that allows using this bot.',
           ephemeral: true,
@@ -44,23 +46,30 @@ export function createSessionCommand(
           const session = sessionManager.getByThread(threadId);
 
           if (!session) {
-            await interaction.reply({
-              content: 'No active session in this thread.',
-              ephemeral: true,
-            });
+            await interaction.reply({ content: 'No active session in this thread.', ephemeral: true });
             return;
           }
 
           if (session.userId !== interaction.user.id) {
-            await interaction.reply({
-              content: 'You can only end your own sessions.',
-              ephemeral: true,
-            });
+            await interaction.reply({ content: 'You can only end your own sessions.', ephemeral: true });
             return;
           }
 
+          const duration = formatDuration(Date.now() - session.createdAt);
+          const msgCount = session.messages.length;
           sessionManager.endSession(threadId);
-          await interaction.reply('Session ended. This thread is now inactive.');
+
+          const embed = new EmbedBuilder()
+            .setColor(BotColors.Neutral)
+            .setTitle('Session Ended')
+            .setDescription('This thread is now inactive.')
+            .addFields(
+              { name: 'Duration', value: duration, inline: true },
+              { name: 'Messages', value: `${msgCount}`, inline: true },
+            )
+            .setTimestamp();
+
+          await interaction.reply({ embeds: [embed] });
         }
 
         if (subcommand === 'reset') {
@@ -68,28 +77,32 @@ export function createSessionCommand(
           const session = sessionManager.getByThread(threadId);
 
           if (!session) {
-            await interaction.reply({
-              content: 'No active session in this thread.',
-              ephemeral: true,
-            });
+            await interaction.reply({ content: 'No active session in this thread.', ephemeral: true });
             return;
           }
 
           if (session.userId !== interaction.user.id) {
-            await interaction.reply({
-              content: 'You can only reset your own sessions.',
-              ephemeral: true,
-            });
+            await interaction.reply({ content: 'You can only reset your own sessions.', ephemeral: true });
             return;
           }
 
+          const oldMsgCount = session.messages.length;
           session.messages = [];
-          // Clear CC session ID so next message starts fresh (both DB and in-memory map)
           import('../../storage/database.js').then(({ deleteClaudeCodeSession }) => {
             deleteClaudeCodeSession(session.id);
           }).catch(() => {});
           aiClient?.clearClaudeCodeSession(session.id);
-          await interaction.reply({ content: 'Session reset. Conversation history cleared and CC session restarted.', ephemeral: true });
+
+          const embed = new EmbedBuilder()
+            .setColor(BotColors.Success)
+            .setTitle('Session Reset')
+            .setDescription('Conversation history cleared and CC session restarted.')
+            .addFields(
+              { name: 'Messages Cleared', value: `${oldMsgCount}`, inline: true },
+            )
+            .setTimestamp();
+
+          await interaction.reply({ embeds: [embed], ephemeral: true });
         }
 
         if (subcommand === 'status') {
@@ -98,22 +111,31 @@ export function createSessionCommand(
             .filter((s) => s.userId === interaction.user.id);
 
           if (sessions.length === 0) {
-            await interaction.reply({
-              content: 'You have no active sessions.',
-              ephemeral: true,
-            });
+            const embed = new EmbedBuilder()
+              .setColor(BotColors.Neutral)
+              .setTitle('Your Sessions')
+              .setDescription('No active sessions. Use `/code` to start one.')
+              .setTimestamp();
+
+            await interaction.reply({ embeds: [embed], ephemeral: true });
             return;
           }
 
-          const lines = sessions.map(
-            (s) =>
-              `• <#${s.threadId}> — ${s.messages.length} messages — started <t:${Math.floor(s.createdAt / 1000)}:R>`,
-          );
+          const embed = new EmbedBuilder()
+            .setColor(BotColors.Session)
+            .setTitle(`Your Active Sessions (${sessions.length})`)
+            .setTimestamp();
 
-          await interaction.reply({
-            content: `**Your active sessions (${sessions.length}):**\n${lines.join('\n')}`,
-            ephemeral: true,
-          });
+          for (const s of sessions.slice(0, 10)) {
+            const age = formatDuration(Date.now() - s.createdAt);
+            const idle = formatDuration(Date.now() - s.lastActiveAt);
+            embed.addFields({
+              name: `<#${s.threadId}>`,
+              value: `${s.messages.length} messages | Age: ${age} | Idle: ${idle}${s.repoOwner ? ` | Repo: ${s.repoOwner}/${s.repoName}` : ''}`,
+            });
+          }
+
+          await interaction.reply({ embeds: [embed], ephemeral: true });
         }
       } catch (err) {
         const msg = formatApiError(err);

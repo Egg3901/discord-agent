@@ -50,7 +50,7 @@ export function createRepoCommand(
     },
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null)) {
+      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
         await interaction.reply({
           content: 'You do not have a role that allows using this bot.',
           ephemeral: true,
@@ -83,6 +83,9 @@ export function createRepoCommand(
         // Store repo owner/name for tool executor
         session.repoOwner = owner;
         session.repoName = repo;
+        repoFetcher.getDefaultBranch(owner, repo)
+          .then((branch) => { session.defaultBranch = branch; })
+          .catch(() => {});
 
         if (paths && paths.length > 0) {
           // If specific paths requested, fetch those files

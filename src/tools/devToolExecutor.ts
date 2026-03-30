@@ -31,6 +31,9 @@ export const GIT_TOOL_NAMES = new Set([
   'git_push', 'git_pull', 'git_branch', 'git_checkout', 'git_clone',
 ]);
 
+export const WORKSPACE_TOOL_NAMES = new Set(['patch_file']);
+export const ADVANCED_TOOL_NAMES = new Set(['http_request', 'find_replace_all', 'download_file', 'run_tests']);
+
 /**
  * Execute dev tools (terminal, git, build) in the session workspace.
  */
@@ -41,6 +44,12 @@ export class DevToolExecutor {
     if (GIT_TOOL_NAMES.has(toolName)) {
       return this.gitTool(toolName, input);
     }
+    if (WORKSPACE_TOOL_NAMES.has(toolName)) {
+      return this.workspaceTool(toolName, input);
+    }
+    if (ADVANCED_TOOL_NAMES.has(toolName)) {
+      return this.advancedTool(toolName, input);
+    }
     switch (toolName) {
       case 'run_terminal':
         return this.runTerminal(input);
@@ -49,6 +58,380 @@ export class DevToolExecutor {
       default:
         return `Unknown dev tool: ${toolName}`;
     }
+  }
+
+  /**
+   * Handle workspace file operations (patch_file).
+   */
+  private async workspaceTool(toolName: string, input: Record<string, unknown>): Promise<string> {
+    if (toolName === 'patch_file') {
+      return this.patchFile(input);
+    }
+    return `Unknown workspace tool: ${toolName}`;
+  }
+
+  /**
+   * Apply surgical SEARCH/REPLACE edits to a file in the git workspace.
+   */
+  private async patchFile(input: Record<string, unknown>): Promise<string> {
+    const path = input.path;
+    const editsStr = input.edits;
+    if (typeof path !== 'string' || path.length === 0) {
+      return 'Error: path must be a non-empty string';
+    }
+    if (typeof editsStr !== 'string' || editsStr.length === 0) {
+      return 'Error: edits must be a JSON array string';
+    }
+
+    // Prevent path traversal
+    if (path.includes('..') || path.startsWith('/')) {
+      return 'Error: path must be relative and cannot contain ".."';
+    }
+
+    const { editFile } = await import('./fileEditor.js');
+    const result = await editFile(path, editsStr, this.sandboxDir);
+    return result.message;
+  }
+
+  /**
+   * Handle advanced tools (http_request, find_replace_all, download_file, run_tests).
+   */
+  private async advancedTool(toolName: string, input: Record<string, unknown>): Promise<string> {
+    switch (toolName) {
+      case 'http_request': return this.httpRequest(input);
+      case 'find_replace_all': return this.findReplaceAll(input);
+      case 'download_file': return this.downloadFile(input);
+      case 'run_tests': return this.runTests(input);
+      default: return `Unknown advanced tool: ${toolName}`;
+    }
+  }
+
+  /**
+   * Make an HTTP request and return structured results.
+   */
+  private async httpRequest(input: Record<string, unknown>): Promise<string> {
+    const url = input.url;
+    if (typeof url !== 'string' || !url.startsWith('http')) {
+      return 'Error: url must start with http:// or https://';
+    }
+
+    const method = (typeof input.method === 'string' ? input.method.toUpperCase() : 'GET');
+    const validMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+    if (!validMethods.includes(method)) {
+      return `Error: method must be one of: ${validMethods.join(', ')}`;
+    }
+
+    let headers: Record<string, string> = {};
+    if (typeof input.headers === 'string') {
+      try {
+        headers = JSON.parse(input.headers);
+      } catch {
+        return 'Error: headers must be a valid JSON object';
+      }
+    }
+
+    const body = typeof input.body === 'string' ? input.body : undefined;
+
+    try {
+      const resp = await fetch(url, {
+        method,
+        headers,
+        body: (method !== 'GET' && method !== 'HEAD') ? body : undefined,
+        signal: AbortSignal.timeout(30_000),
+        redirect: 'follow',
+      });
+
+      const respHeaders: string[] = [];
+      resp.headers.forEach((value, key) => {
+        respHeaders.push(`${key}: ${value}`);
+      });
+
+      let respBody: string;
+      const contentType = resp.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        try {
+          const json = await resp.json();
+          respBody = JSON.stringify(json, null, 2);
+        } catch {
+          respBody = await resp.text();
+        }
+      } else {
+        respBody = await resp.text();
+      }
+
+      // Truncate large responses
+      if (respBody.length > 30_000) {
+        respBody = respBody.slice(0, 30_000) + '\n\n[Response truncated — 30KB limit]';
+      }
+
+      return [
+        `**${resp.status} ${resp.statusText}**`,
+        '',
+        '**Response Headers:**',
+        respHeaders.slice(0, 20).join('\n'),
+        '',
+        '**Body:**',
+        respBody,
+      ].join('\n');
+    } catch (err: any) {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        return 'Error: Request timed out after 30 seconds';
+      }
+      return `Error: ${err.message || String(err)}`;
+    }
+  }
+
+  /**
+   * Find and replace across multiple files in the workspace.
+   */
+  private async findReplaceAll(input: Record<string, unknown>): Promise<string> {
+    const search = input.search;
+    const replace = input.replace;
+    if (typeof search !== 'string' || search.length === 0) return 'Error: search must be a non-empty string';
+    if (typeof replace !== 'string') return 'Error: replace must be a string';
+
+    const globPattern = typeof input.glob === 'string' ? input.glob : '**/*';
+    const isRegex = input.is_regex === true;
+
+    try {
+      let pattern: RegExp;
+      if (isRegex) {
+        pattern = new RegExp(search, 'g');
+      } else {
+        // Escape for literal match
+        pattern = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+      }
+
+      // Use find to get matching files
+      const { execSync } = await import('node:child_process');
+      const findCmd = `find . -type f -name "${globPattern.replace(/\*\*\//g, '').replace(/"/g, '')}" 2>/dev/null | head -500`;
+      // Use a more reliable approach: grep for files containing the search string
+      const grepCmd = isRegex
+        ? `grep -rl -E "${search.replace(/"/g, '\\"')}" --include="${globPattern.replace(/\*\*\//g, '')}" . 2>/dev/null | head -200`
+        : `grep -rl -F "${search.replace(/"/g, '\\"')}" --include="${globPattern.replace(/\*\*\//g, '')}" . 2>/dev/null | head -200`;
+
+      let filePaths: string[];
+      try {
+        const out = execSync(grepCmd, { cwd: this.sandboxDir, encoding: 'utf-8', timeout: 15_000 });
+        filePaths = out.trim().split('\n').filter(Boolean).map(f => f.replace(/^\.\//, ''));
+      } catch {
+        return 'No files matched the search pattern.';
+      }
+
+      if (filePaths.length === 0) return 'No files matched the search pattern.';
+
+      let totalReplacements = 0;
+      const changes: string[] = [];
+
+      for (const filePath of filePaths) {
+        const fullPath = join(this.sandboxDir, filePath);
+        try {
+          const content = await readFile(fullPath, 'utf-8');
+          const matches = content.match(pattern);
+          if (!matches || matches.length === 0) continue;
+
+          const newContent = content.replace(pattern, replace as string);
+          if (newContent === content) continue;
+
+          await writeFile(fullPath, newContent, 'utf-8');
+          totalReplacements += matches.length;
+          changes.push(`${filePath}: ${matches.length} replacement(s)`);
+        } catch {
+          // Skip binary or unreadable files
+        }
+      }
+
+      if (totalReplacements === 0) return 'Search pattern found in files but no replacements were made (pattern may not match with regex flags).';
+
+      return [
+        `**${totalReplacements} replacement(s) across ${changes.length} file(s):**`,
+        '',
+        ...changes,
+        '',
+        'Use `git_diff` to review changes.',
+      ].join('\n');
+    } catch (err: any) {
+      return `Error: ${err.message || String(err)}`;
+    }
+  }
+
+  /**
+   * Download a file from URL into the workspace.
+   */
+  private async downloadFile(input: Record<string, unknown>): Promise<string> {
+    const url = input.url;
+    const path = input.path;
+    if (typeof url !== 'string' || !url.startsWith('http')) {
+      return 'Error: url must start with http:// or https://';
+    }
+    if (typeof path !== 'string' || path.length === 0) {
+      return 'Error: path must be a non-empty string';
+    }
+    if (path.includes('..') || path.startsWith('/')) {
+      return 'Error: path must be relative and cannot contain ".."';
+    }
+
+    try {
+      const resp = await fetch(url, {
+        signal: AbortSignal.timeout(60_000),
+        redirect: 'follow',
+      });
+
+      if (!resp.ok) {
+        return `Error: HTTP ${resp.status} ${resp.statusText}`;
+      }
+
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      const maxSize = 10 * 1024 * 1024; // 10MB
+      if (buffer.length > maxSize) {
+        return `Error: File too large (${(buffer.length / 1024 / 1024).toFixed(1)}MB, max 10MB)`;
+      }
+
+      const fullPath = join(this.sandboxDir, path);
+      const { dirname } = await import('node:path');
+      await mkdir(dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, buffer);
+
+      return `Downloaded ${(buffer.length / 1024).toFixed(1)}KB to \`${path}\``;
+    } catch (err: any) {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        return 'Error: Download timed out after 60 seconds';
+      }
+      return `Error: ${err.message || String(err)}`;
+    }
+  }
+
+  /**
+   * Run tests with structured result parsing.
+   */
+  private async runTests(input: Record<string, unknown>): Promise<string> {
+    const file = typeof input.file === 'string' ? input.file.trim() : '';
+    const grep = typeof input.grep === 'string' ? input.grep.trim() : '';
+
+    // Detect test framework and build command
+    let cmd: string | null = null;
+    let parser: 'jest' | 'vitest' | 'pytest' | 'go' | 'cargo' | 'generic' = 'generic';
+
+    if (await this.fileExists('package.json')) {
+      const pkgJson = await this.readJson('package.json');
+      const scripts = pkgJson?.scripts || {};
+      const deps = { ...pkgJson?.dependencies, ...pkgJson?.devDependencies };
+      const pm = await this.detectPackageManager();
+
+      if (deps['vitest'] || scripts.test?.includes('vitest')) {
+        parser = 'vitest';
+        cmd = `npx vitest run --reporter=verbose`;
+        if (file) cmd += ` ${file}`;
+        if (grep) cmd += ` -t "${grep}"`;
+      } else if (deps['jest'] || scripts.test?.includes('jest')) {
+        parser = 'jest';
+        cmd = `npx jest --verbose --no-coverage`;
+        if (file) cmd += ` ${file}`;
+        if (grep) cmd += ` -t "${grep}"`;
+      } else if (scripts.test) {
+        cmd = `${pm} run test`;
+        if (file) cmd += ` -- ${file}`;
+      }
+    } else if (await this.fileExists('pyproject.toml') || await this.fileExists('pytest.ini') || await this.fileExists('setup.py')) {
+      parser = 'pytest';
+      cmd = `python -m pytest -v`;
+      if (file) cmd += ` ${file}`;
+      if (grep) cmd += ` -k "${grep}"`;
+    } else if (await this.fileExists('go.mod')) {
+      parser = 'go';
+      cmd = `go test -v ./...`;
+      if (file) cmd += ` -run "${file}"`;
+      if (grep) cmd += ` -run "${grep}"`;
+    } else if (await this.fileExists('Cargo.toml')) {
+      parser = 'cargo';
+      cmd = `cargo test`;
+      if (grep) cmd += ` ${grep}`;
+      cmd += ` -- --nocapture`;
+    }
+
+    if (!cmd) {
+      return 'Error: Could not detect test framework. Supported: vitest, jest, pytest, go test, cargo test. Use `run_terminal` for custom test commands.';
+    }
+
+    const raw = await this.exec('bash', ['-c', cmd], 120_000); // 2 min timeout for tests
+
+    // Parse structured results from the output
+    return this.parseTestResults(raw, parser);
+  }
+
+  private parseTestResults(raw: string, parser: string): string {
+    const lines = raw.split('\n');
+    const passed: string[] = [];
+    const failed: string[] = [];
+    const skipped: string[] = [];
+    let currentFailure = '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      // Jest / Vitest patterns
+      if (trimmed.match(/^\s*[✓✔√]\s+/) || trimmed.match(/^\s*✓\s+/) || trimmed.match(/^\s*PASS\s+/)) {
+        passed.push(trimmed);
+      } else if (trimmed.match(/^\s*[✗✘×]\s+/) || trimmed.match(/^\s*✕\s+/) || trimmed.match(/^\s*FAIL\s+/)) {
+        if (currentFailure) failed.push(currentFailure);
+        currentFailure = trimmed;
+      } else if (trimmed.match(/^\s*-\s+/) && trimmed.includes('skipped')) {
+        skipped.push(trimmed);
+      }
+      // Pytest patterns
+      else if (trimmed.match(/PASSED$/)) {
+        passed.push(trimmed);
+      } else if (trimmed.match(/FAILED$/)) {
+        if (currentFailure) failed.push(currentFailure);
+        currentFailure = trimmed;
+      } else if (trimmed.match(/SKIPPED$/)) {
+        skipped.push(trimmed);
+      }
+      // Go test patterns
+      else if (trimmed.startsWith('--- PASS:')) {
+        passed.push(trimmed);
+      } else if (trimmed.startsWith('--- FAIL:')) {
+        if (currentFailure) failed.push(currentFailure);
+        currentFailure = trimmed;
+      } else if (trimmed.startsWith('--- SKIP:')) {
+        skipped.push(trimmed);
+      }
+      // Cargo test patterns
+      else if (trimmed.match(/^test .+ \.\.\. ok$/)) {
+        passed.push(trimmed);
+      } else if (trimmed.match(/^test .+ \.\.\. FAILED$/)) {
+        if (currentFailure) failed.push(currentFailure);
+        currentFailure = trimmed;
+      }
+      // Accumulate failure details
+      else if (currentFailure && trimmed.length > 0) {
+        currentFailure += '\n' + line;
+      }
+    }
+    if (currentFailure) failed.push(currentFailure);
+
+    const total = passed.length + failed.length + skipped.length;
+    const summary = [
+      `**Test Results: ${failed.length === 0 ? 'ALL PASSED' : `${failed.length} FAILED`}**`,
+      `Total: ${total} | Passed: ${passed.length} | Failed: ${failed.length}${skipped.length > 0 ? ` | Skipped: ${skipped.length}` : ''}`,
+    ];
+
+    if (failed.length > 0) {
+      summary.push('', '**Failures:**');
+      for (const f of failed.slice(0, 10)) {
+        summary.push(f.slice(0, 500));
+      }
+      if (failed.length > 10) {
+        summary.push(`\n... and ${failed.length - 10} more failures`);
+      }
+    }
+
+    // If we couldn't parse anything, return the raw output
+    if (total === 0) {
+      return raw;
+    }
+
+    return summary.join('\n');
   }
 
   private async runTerminal(input: Record<string, unknown>): Promise<string> {
@@ -170,7 +553,7 @@ export class DevToolExecutor {
     const { env: extraEnv, cleanup } = await this.getGitCredentialEnv();
 
     // Set git author/committer identity
-    const { name: gitName, email: gitEmail } = await this.getGitIdentity();
+    const { name: gitName, email: gitEmail } = await resolveGitIdentity();
     extraEnv['GIT_AUTHOR_NAME'] = gitName;
     extraEnv['GIT_COMMITTER_NAME'] = gitName;
     extraEnv['GIT_AUTHOR_EMAIL'] = gitEmail;
@@ -181,38 +564,6 @@ export class DevToolExecutor {
     } finally {
       await cleanup();
     }
-  }
-
-  /**
-   * Resolve git author identity from GITHUB_TOKEN.
-   * Calls GET /user once and caches the result for the process lifetime.
-   */
-  private async getGitIdentity(): Promise<{ name: string; email: string }> {
-    if (cachedGitHubUser) return cachedGitHubUser;
-
-    if (config.GITHUB_TOKEN) {
-      try {
-        const res = await fetch('https://api.github.com/user', {
-          headers: {
-            Authorization: `Bearer ${config.GITHUB_TOKEN}`,
-            Accept: 'application/vnd.github+json',
-          },
-        });
-        if (res.ok) {
-          const user = await res.json() as { login: string; name: string | null; id: number };
-          cachedGitHubUser = {
-            name: user.name || user.login,
-            email: `${user.id}+${user.login}@users.noreply.github.com`,
-          };
-          logger.info(`Git identity resolved from GitHub token: ${cachedGitHubUser.name} <${cachedGitHubUser.email}>`);
-          return cachedGitHubUser;
-        }
-      } catch {
-        // Network error — fall through to default
-      }
-    }
-
-    return { name: 'AI Assistant', email: 'noreply@users.noreply.github.com' };
   }
 
   private async buildProject(input: Record<string, unknown>): Promise<string> {
@@ -446,7 +797,8 @@ export class DevToolExecutor {
  * Ensure the sandbox directory is set up as a git workspace for the given repo.
  * - If empty: shallow clone the repo
  * - If already a git repo: fetch & pull to get latest changes
- * - Sets up auth if GITHUB_TOKEN is available
+ * - Always configures git identity from GITHUB_TOKEN (or fallback)
+ * - Uses GIT_ASKPASS for auth (never embeds token in URLs)
  *
  * Called at session startup so the model always sees a valid git repo.
  */
@@ -454,13 +806,23 @@ export async function ensureGitWorkspace(
   sandboxDir: string,
   repoUrl: string,
 ): Promise<{ ok: boolean; message: string }> {
+  // Resolve git identity upfront so it's available for all operations
+  const identity = await resolveGitIdentity();
+
+  // Build a secure credential environment (GIT_ASKPASS, never token-in-URL)
+  const { env: credEnv, cleanup } = await buildGitCredentialEnv();
+
   const execGit = (args: string[], timeoutMs = 60_000): Promise<{ stdout: string; stderr: string; code: number | null }> => {
     return new Promise((resolve) => {
-      const env: Record<string, string | undefined> = { ...process.env, HOME: sandboxDir };
-      // Set up auth
-      if (config.GITHUB_TOKEN) {
-        env['GIT_TERMINAL_PROMPT'] = '0';
-      }
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        HOME: sandboxDir,
+        GIT_AUTHOR_NAME: identity.name,
+        GIT_COMMITTER_NAME: identity.name,
+        GIT_AUTHOR_EMAIL: identity.email,
+        GIT_COMMITTER_EMAIL: identity.email,
+        ...credEnv,
+      };
       const proc = spawn('git', args, {
         cwd: sandboxDir,
         timeout: timeoutMs,
@@ -483,11 +845,17 @@ export async function ensureGitWorkspace(
     const isGitRepo = files.includes('.git');
 
     if (isGitRepo) {
-      // Already cloned — pull latest
-      logger.info({ sandboxDir, repoUrl }, 'Workspace already has git repo, pulling latest');
+      // Already cloned — configure identity + pull latest
+      logger.info({ sandboxDir, repoUrl }, 'Workspace already has git repo, configuring identity and pulling latest');
+
+      // Set identity in repo config so it persists for all future commands
+      await execGit(['config', 'user.name', identity.name], 5000);
+      await execGit(['config', 'user.email', identity.email], 5000);
+
       const result = await execGit(['pull', '--ff-only'], 30_000);
+      await cleanup();
       if (result.code === 0) {
-        return { ok: true, message: 'Pulled latest changes' };
+        return { ok: true, message: `Pulled latest changes (identity: ${identity.name} <${identity.email}>)` };
       }
       // Pull failed (diverged, etc.) — still usable, just warn
       logger.warn({ stderr: result.stderr, sandboxDir }, 'Git pull failed, workspace may be stale');
@@ -496,26 +864,93 @@ export async function ensureGitWorkspace(
 
     if (files.length > 0) {
       // Directory has files but no .git — can't clone into it
+      await cleanup();
       logger.warn({ sandboxDir, fileCount: files.length }, 'Workspace has files but is not a git repo');
       return { ok: false, message: 'Workspace has existing files but is not a git repo' };
     }
 
-    // Empty directory — clone
-    const cloneUrl = config.GITHUB_TOKEN
-      ? repoUrl.replace('https://github.com/', `https://x-access-token:${config.GITHUB_TOKEN}@github.com/`)
-      : repoUrl;
-
+    // Empty directory — clone using GIT_ASKPASS (no token in URL)
     logger.info({ repoUrl, sandboxDir }, 'Cloning repo into workspace');
-    const result = await execGit(['clone', '--depth', '1', cloneUrl, '.']);
+    const result = await execGit(['clone', '--depth', '1', repoUrl, '.']);
     if (result.code === 0) {
-      return { ok: true, message: 'Repository cloned successfully' };
+      // Configure identity on the freshly cloned repo
+      await execGit(['config', 'user.name', identity.name], 5000);
+      await execGit(['config', 'user.email', identity.email], 5000);
+      await cleanup();
+      return { ok: true, message: `Repository cloned (identity: ${identity.name} <${identity.email}>)` };
     }
 
+    await cleanup();
     logger.warn({ stderr: result.stderr, code: result.code, repoUrl }, 'Git clone failed');
     return { ok: false, message: `Clone failed: ${result.stderr.slice(0, 200)}` };
   } catch (err) {
+    await cleanup();
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ err, sandboxDir, repoUrl }, 'ensureGitWorkspace failed');
     return { ok: false, message: `Workspace setup error: ${msg}` };
+  }
+}
+
+/**
+ * Resolve git identity from GITHUB_TOKEN.
+ * Calls GET /user once and caches for the process lifetime.
+ */
+async function resolveGitIdentity(): Promise<{ name: string; email: string }> {
+  if (cachedGitHubUser) return cachedGitHubUser;
+
+  if (config.GITHUB_TOKEN) {
+    try {
+      const res = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${config.GITHUB_TOKEN}`,
+          Accept: 'application/vnd.github+json',
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.ok) {
+        const user = await res.json() as { login: string; name: string | null; id: number };
+        cachedGitHubUser = {
+          name: user.name || user.login,
+          email: `${user.id}+${user.login}@users.noreply.github.com`,
+        };
+        logger.info(`Git identity resolved from GitHub token: ${cachedGitHubUser.name} <${cachedGitHubUser.email}>`);
+        return cachedGitHubUser;
+      }
+    } catch {
+      // Network error — fall through to default
+    }
+  }
+
+  return { name: 'AI Assistant', email: 'noreply@users.noreply.github.com' };
+}
+
+/**
+ * Build GIT_ASKPASS environment for secure credential passing.
+ * Creates a temporary script that provides the token without embedding it in URLs.
+ */
+async function buildGitCredentialEnv(): Promise<{ env: Record<string, string>; cleanup: () => Promise<void> }> {
+  if (!config.GITHUB_TOKEN) return { env: { GIT_TERMINAL_PROMPT: '0' }, cleanup: async () => {} };
+
+  try {
+    const askpassPath = join(tmpdir(), `.git-askpass-${Date.now()}-${process.pid}.sh`);
+    const token = config.GITHUB_TOKEN;
+    await writeFile(
+      askpassPath,
+      `#!/bin/sh\ncase "$1" in\n  *sername*) echo "x-access-token" ;;\n  *) echo "${token}" ;;\nesac\n`,
+      { mode: 0o700 },
+    );
+
+    return {
+      env: {
+        GIT_ASKPASS: askpassPath,
+        GIT_TERMINAL_PROMPT: '0',
+      },
+      cleanup: async () => {
+        try { await unlink(askpassPath); } catch { /* ignore */ }
+      },
+    };
+  } catch (err) {
+    logger.warn({ err }, 'Failed to set up git credentials');
+    return { env: { GIT_TERMINAL_PROMPT: '0' }, cleanup: async () => {} };
   }
 }

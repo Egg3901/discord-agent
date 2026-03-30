@@ -4,6 +4,7 @@ import {
   ChannelType,
   type TextChannel,
   type ThreadChannel,
+  type DMChannel,
 } from 'discord.js';
 import { logger } from '../../utils/logger.js';
 import { formatApiError } from '../../utils/errors.js';
@@ -18,6 +19,7 @@ import { runAgentLoop } from '../../claude/agentLoop.js';
 import { config } from '../../config.js';
 import { logUsage } from '../../storage/database.js';
 import { TOOL_EMOJIS, TOOL_LABELS, formatToolDetail, formatCCToolDetail } from '../../utils/toolDisplay.js';
+import { sendCompletionWithNextSteps } from '../../utils/nextSteps.js';
 
 export function handleMessageCreate(
   client: Client,
@@ -29,19 +31,33 @@ export function handleMessageCreate(
   client.on('messageCreate', async (message: Message) => {
     if (message.author.bot) return;
 
+    const isDm = message.channel.type === ChannelType.DM;
+
     if (
+      !isDm &&
       message.channel.type !== ChannelType.PublicThread &&
       message.channel.type !== ChannelType.PrivateThread
     ) {
       return;
     }
 
-    // Access check
-    if (!isAllowed(message.member)) return;
+    // Access check — pass userId for DM allowlist lookup when member is null
+    if (!isAllowed(message.member, message.author.id)) {
+      if (isDm) {
+        logger.debug({ userId: message.author.id }, 'DM message denied: user not on allowlist');
+      }
+      return;
+    }
 
     const threadId = message.channel.id;
     const session = sessionManager.getByThread(threadId);
-    if (!session) return;
+    if (!session) {
+      // In DMs without an active session, ignore silently
+      if (isDm) {
+        logger.debug({ userId: message.author.id, channelId: threadId }, 'DM message ignored: no active session for this channel');
+      }
+      return;
+    }
 
     // Reject concurrent messages while a response is being generated
     if (session.busy) {
@@ -54,7 +70,7 @@ export function handleMessageCreate(
       return;
     }
 
-    const channel = message.channel as ThreadChannel;
+    const channel = message.channel as ThreadChannel | DMChannel;
 
     // Include file attachment contents and images in the message
     let content = message.content;
@@ -185,6 +201,7 @@ export function handleMessageCreate(
           const loopStart = Date.now();
           let fullResponse = '';
           let toolCallCount = 0;
+          const toolNames: string[] = [];
           let detached = false;
           let lastToolMsg: import('discord.js').Message | null = null;
           for await (const event of aiClient.streamResponse(session.messages, baseStreamOptions)) {
@@ -204,6 +221,7 @@ export function handleMessageCreate(
                 await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
               }
               toolCallCount++;
+              toolNames.push(event.name);
               const detail = formatCCToolDetail(event.name, event.input);
               lastToolMsg = await channel.send(`> \u{1F527} \`${event.name}\`${detail ? ` ${detail}` : ''}`);
             }
@@ -217,8 +235,11 @@ export function handleMessageCreate(
           await streamer.finish();
           sessionManager.addMessage(threadId, { role: 'assistant', content: fullResponse });
           if (toolCallCount > 0) {
-            const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
-            await channel.send(`<@${message.author.id}> Done \u2014 ${toolCallCount} tool call(s) in ${elapsed}s`).catch(() => {});
+            await sendCompletionWithNextSteps(channel, message.author.id, {
+              toolNames,
+              totalCalls: toolCallCount,
+              elapsed: Date.now() - loopStart,
+            });
           }
         } else if (hasTools) {
           // Agentic mode for Anthropic / Gemini
@@ -228,9 +249,11 @@ export function handleMessageCreate(
             session.repoName || '',
             session.id,
             session.repoContext?.repoUrl,
+            session.defaultBranch,
           );
           let lastToolMsg: import('discord.js').Message | null = null;
           let agentToolCount = 0;
+          const agentToolNames: string[] = [];
           let agentDetached = false;
           const loopStart = Date.now();
           const result = await runAgentLoop(
@@ -250,6 +273,7 @@ export function handleMessageCreate(
               },
               onToolStart: async (name, input) => {
                 agentToolCount++;
+                agentToolNames.push(name);
                 const emoji = TOOL_EMOJIS[name] || '\u{1F527}';
                 const label = TOOL_LABELS[name] || name;
                 const detail = formatToolDetail(name, input);
@@ -276,9 +300,12 @@ export function handleMessageCreate(
             sessionManager.addMessage(threadId, msg);
           }
           if (result.toolCallCount > 0) {
-            const elapsed = ((Date.now() - loopStart) / 1000).toFixed(1);
             logger.info({ sessionId: session.id, toolCalls: result.toolCallCount, iterations: result.iterations }, 'Agent loop completed');
-            await channel.send(`<@${message.author.id}> Done \u2014 ${result.toolCallCount} tool call(s) in ${elapsed}s`).catch(() => {});
+            await sendCompletionWithNextSteps(channel, message.author.id, {
+              toolNames: agentToolNames,
+              totalCalls: result.toolCallCount,
+              elapsed: Date.now() - loopStart,
+            });
           }
         } else {
           // Simple streaming mode

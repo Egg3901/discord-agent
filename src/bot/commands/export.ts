@@ -1,12 +1,14 @@
 import {
   SlashCommandBuilder,
   AttachmentBuilder,
+  EmbedBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { formatApiError } from '../../utils/errors.js';
+import { BotColors, formatDuration } from '../../utils/embedHelpers.js';
 import type { CommandHandler } from './types.js';
 import type { ConversationMessage, ContentBlock } from '../../claude/aiClient.js';
 
@@ -44,7 +46,7 @@ export function createExportCommand(sessionManager: SessionManager): CommandHand
       .setDescription('Export this session conversation as a markdown file'),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null)) {
+      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
         await interaction.reply({
           content: 'You do not have a role that allows using this bot.',
           ephemeral: true,
@@ -97,8 +99,21 @@ export function createExportCommand(sessionManager: SessionManager): CommandHand
         const filename = `session-${session.id}-${Date.now()}.md`;
         const attachment = new AttachmentBuilder(buffer, { name: filename });
 
+        const fileSizeKB = (buffer.length / 1024).toFixed(1);
+        const sessionAge = formatDuration(Date.now() - session.createdAt);
+
+        const exportEmbed = new EmbedBuilder()
+          .setColor(BotColors.Success)
+          .setTitle('Session Exported')
+          .addFields(
+            { name: 'Messages', value: `${session.messages.length}`, inline: true },
+            { name: 'File Size', value: `${fileSizeKB} KB`, inline: true },
+            { name: 'Session Age', value: sessionAge, inline: true },
+          )
+          .setTimestamp();
+
         await interaction.editReply({
-          content: `Session exported (${session.messages.length} messages).`,
+          embeds: [exportEmbed],
           files: [attachment],
         });
       } catch (err) {

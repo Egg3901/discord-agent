@@ -447,6 +447,203 @@ export const WEB_TOOLS: ToolDefinition[] = [
 ];
 
 /**
+ * GitHub tools for issue/PR workflow.
+ * Available when ENABLE_DEV_TOOLS is true and GITHUB_TOKEN is set.
+ */
+export const GITHUB_TOOLS: ToolDefinition[] = [
+  {
+    name: 'create_pr',
+    description:
+      'Create a GitHub pull request from the current branch. Requires changes to be committed and pushed first. Automatically generates a title from the branch name if not provided. Use after git_push to complete the workflow.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'PR title. If omitted, auto-generated from branch name.',
+        },
+        body: {
+          type: 'string',
+          description: 'PR description in markdown. Summarize what changed and why.',
+        },
+        base: {
+          type: 'string',
+          description: 'Base branch to merge into. Defaults to the repository\'s default branch (auto-detected). Override with "main", "master", "develop", etc.',
+        },
+        draft: {
+          type: 'boolean',
+          description: 'Create as draft PR (default: false).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'read_github_issue',
+    description:
+      'Read a GitHub issue to understand requirements, bug reports, or feature requests before writing code. Returns the issue title, body, labels, assignees, and comments. Use this to understand what needs to be done.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        issue: {
+          type: 'string',
+          description: 'Issue reference: number (e.g. "42"), URL (https://github.com/owner/repo/issues/42), or owner/repo#42.',
+        },
+      },
+      required: ['issue'],
+    },
+  },
+  {
+    name: 'create_github_issue',
+    description:
+      'Create a new GitHub issue for tracking bugs, TODO items, or follow-up work discovered during a coding session. Returns the created issue URL.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Issue title (concise summary of the problem or task).',
+        },
+        body: {
+          type: 'string',
+          description: 'Issue body in markdown. Include context, reproduction steps for bugs, or acceptance criteria for features.',
+        },
+        labels: {
+          type: 'string',
+          description: 'Comma-separated label names (e.g. "bug,high-priority"). Labels must already exist in the repo.',
+        },
+      },
+      required: ['title'],
+    },
+  },
+];
+
+/**
+ * Workspace file editing tool for surgical edits in the dev workspace (cloned repo).
+ * Available when ENABLE_DEV_TOOLS is true.
+ */
+export const WORKSPACE_TOOLS: ToolDefinition[] = [
+  {
+    name: 'patch_file',
+    description:
+      'Apply surgical SEARCH/REPLACE edits to a file in the git workspace (cloned repository). Unlike edit_file which works in the sandbox, this tool modifies files in the actual cloned repo so changes appear in git_status and can be committed. Returns a unified diff preview.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'File path relative to the workspace root (e.g. "src/index.ts").',
+        },
+        edits: {
+          type: 'string',
+          description: 'JSON array of edit operations. Each edit is {"oldText": "exact text to find", "newText": "replacement text"}. All edits apply atomically.',
+        },
+      },
+      required: ['path', 'edits'],
+    },
+  },
+];
+
+/**
+ * Advanced tools for API testing, bulk edits, file downloads, and test execution.
+ * Available when ENABLE_DEV_TOOLS is true.
+ */
+export const ADVANCED_TOOLS: ToolDefinition[] = [
+  {
+    name: 'http_request',
+    description:
+      'Make an HTTP request to test an API endpoint. Supports all methods, custom headers, and request bodies. Returns status code, headers, and response body. Use for testing REST APIs, webhooks, health checks, or verifying deployed services.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Full URL including protocol (e.g. "http://localhost:3000/api/users", "https://api.example.com/v1/items").',
+        },
+        method: {
+          type: 'string',
+          description: 'HTTP method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS). Defaults to GET.',
+        },
+        headers: {
+          type: 'string',
+          description: 'JSON object of request headers (e.g. \'{"Content-Type": "application/json", "Authorization": "Bearer token"}\').',
+        },
+        body: {
+          type: 'string',
+          description: 'Request body. For JSON APIs, pass the JSON string directly. For form data, use URL-encoded format.',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'find_replace_all',
+    description:
+      'Find and replace text across multiple files in the git workspace. Performs a bulk search-and-replace operation using exact string matching or regex. Returns a summary of all changes made with file paths and match counts. Use for renaming variables, updating imports, or bulk refactoring.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        search: {
+          type: 'string',
+          description: 'Text or regex pattern to find. Use plain text for exact matches.',
+        },
+        replace: {
+          type: 'string',
+          description: 'Replacement text. Supports regex capture groups ($1, $2) when using regex.',
+        },
+        glob: {
+          type: 'string',
+          description: 'Glob pattern to filter files (e.g. "**/*.ts", "src/**/*.js"). Defaults to all files.',
+        },
+        is_regex: {
+          type: 'boolean',
+          description: 'Treat search as regex pattern (default: false, exact string match).',
+        },
+      },
+      required: ['search', 'replace'],
+    },
+  },
+  {
+    name: 'download_file',
+    description:
+      'Download a file from a URL into the git workspace. Use for fetching remote configs, datasets, schemas, or dependency files. Supports binary and text files up to 10MB.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'URL to download from (must start with http:// or https://).',
+        },
+        path: {
+          type: 'string',
+          description: 'Destination path relative to workspace root (e.g. "data/schema.json", "scripts/setup.sh"). Parent directories are created automatically.',
+        },
+      },
+      required: ['url', 'path'],
+    },
+  },
+  {
+    name: 'run_tests',
+    description:
+      'Run tests with structured output parsing. Auto-detects the test framework and returns a structured summary: total, passed, failed, skipped counts plus details of each failing test (name, file, error message). Can run all tests or a specific file/pattern. More useful than build_project("test") because it parses results.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          description: 'Optional: specific test file or pattern to run (e.g. "tests/auth.test.ts", "test_*.py"). Omit to run all tests.',
+        },
+        grep: {
+          type: 'string',
+          description: 'Optional: filter by test name pattern (e.g. "login", "should handle errors").',
+        },
+      },
+      required: [],
+    },
+  },
+];
+
+/**
  * Interactive input tool for clarification prompts.
  * Available when ENABLE_SCRIPT_EXECUTION is true (sandbox tools enabled).
  */

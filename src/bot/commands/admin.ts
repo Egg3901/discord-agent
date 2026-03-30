@@ -1,5 +1,6 @@
 import {
   SlashCommandBuilder,
+  EmbedBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
@@ -9,6 +10,7 @@ import { SessionManager } from '../../sessions/sessionManager.js';
 import { getUsageSummary } from '../../storage/database.js';
 import { Octokit } from '@octokit/rest';
 import { config } from '../../config.js';
+import { BotColors, formatTokens, formatCost, successEmbed } from '../../utils/embedHelpers.js';
 import type { CommandHandler } from './types.js';
 
 export function createAdminCommand(
@@ -102,8 +104,12 @@ export function createAdminCommand(
           const provider = (interaction.options.getString('provider') || 'anthropic') as 'anthropic' | 'google';
           const id = keyPool.addKey(apiKey, provider, interaction.user.id);
           const providerLabel = provider === 'google' ? 'Google (Gemini)' : 'Anthropic (Claude)';
+
           await interaction.reply({
-            content: `Key added with ID: \`${id}\` for **${providerLabel}**. It's now available for use.`,
+            embeds: [successEmbed(`Key added for **${providerLabel}**`).addFields(
+              { name: 'Key ID', value: `\`${id}\``, inline: true },
+              { name: 'Status', value: 'Available for use', inline: true },
+            )],
             ephemeral: true,
           });
           break;
@@ -113,7 +119,9 @@ export function createAdminCommand(
           const id = interaction.options.getString('id', true);
           const removed = keyPool.removeKey(id);
           await interaction.reply({
-            content: removed ? `Key \`${id}\` removed.` : `Key \`${id}\` not found.`,
+            embeds: [removed
+              ? successEmbed(`Key \`${id}\` removed.`)
+              : new EmbedBuilder().setColor(BotColors.Warning).setDescription(`Key \`${id}\` not found.`)],
             ephemeral: true,
           });
           break;
@@ -122,25 +130,33 @@ export function createAdminCommand(
         case 'keys': {
           const keys = keyPool.getKeys();
           if (keys.length === 0) {
-            await interaction.reply({
-              content: 'No API keys configured. Add one with `/admin addkey`.',
-              ephemeral: true,
-            });
+            const embed = new EmbedBuilder()
+              .setColor(BotColors.Neutral)
+              .setTitle('API Keys')
+              .setDescription('No API keys configured. Add one with `/admin addkey`.')
+              .setTimestamp();
+            await interaction.reply({ embeds: [embed], ephemeral: true });
             return;
           }
 
-          const lines = keys.map((k) => {
+          const embed = new EmbedBuilder()
+            .setColor(BotColors.Admin)
+            .setTitle(`API Keys (${keys.length})`)
+            .setTimestamp();
+
+          for (const k of keys.slice(0, 25)) {
             const masked = k.apiKey.slice(0, 10) + '...' + k.apiKey.slice(-4);
             const status =
-              k.status === 'healthy' ? '🟢' : k.status === 'degraded' ? '🟡' : '🔴';
+              k.status === 'healthy' ? '🟢 Healthy' : k.status === 'degraded' ? '🟡 Degraded' : '🔴 Dead';
             const prov = k.provider === 'google' ? 'Gemini' : 'Claude';
-            return `${status} \`${k.id}\` [${prov}] — \`${masked}\` — ${k.totalRequests} total, ${k.requestsThisMinute}/min`;
-          });
+            embed.addFields({
+              name: `\`${k.id}\` [${prov}]`,
+              value: `${status} | \`${masked}\`\n${k.totalRequests} total, ${k.requestsThisMinute}/min`,
+              inline: true,
+            });
+          }
 
-          await interaction.reply({
-            content: `**API Keys (${keys.length}):**\n${lines.join('\n')}`,
-            ephemeral: true,
-          });
+          await interaction.reply({ embeds: [embed], ephemeral: true });
           break;
         }
 
@@ -150,42 +166,55 @@ export function createAdminCommand(
           const todayUsage = getUsageSummary(undefined, 1);
           const weekUsage = getUsageSummary(undefined, 7);
 
-          const msg = [
-            '**Bot Statistics:**',
-            '',
-            '**Key Pool:**',
-            `Keys: ${poolStats.healthy} healthy / ${poolStats.degraded} degraded / ${poolStats.dead} dead (${poolStats.total} total)`,
-            `Queue depth: ${poolStats.queueDepth}`,
-            `Requests/min: ${poolStats.requestsThisMinute}`,
-            '',
-            '**Sessions:**',
-            `Active: ${sessions.length}`,
-            `Unique users: ${new Set(sessions.map((s) => s.userId)).size}`,
-            '',
-            '**Usage — Today:**',
-            `${todayUsage.totalRequests} requests, ${todayUsage.totalTokensIn.toLocaleString()} tokens in / ${todayUsage.totalTokensOut.toLocaleString()} out${todayUsage.totalCostUsd > 0 ? ` ($${todayUsage.totalCostUsd.toFixed(4)})` : ''}`,
-            '',
-            '**Usage — Last 7 days:**',
-            `${weekUsage.totalRequests} requests, ${weekUsage.totalTokensIn.toLocaleString()} tokens in / ${weekUsage.totalTokensOut.toLocaleString()} out${weekUsage.totalCostUsd > 0 ? ` ($${weekUsage.totalCostUsd.toFixed(4)})` : ''}`,
-          ];
+          const embed = new EmbedBuilder()
+            .setColor(BotColors.Admin)
+            .setTitle('Bot Statistics')
+            .addFields(
+              { name: 'Key Pool', value: [
+                `🟢 ${poolStats.healthy} healthy`,
+                `🟡 ${poolStats.degraded} degraded`,
+                `🔴 ${poolStats.dead} dead`,
+                `📊 ${poolStats.total} total`,
+                `⏳ Queue: ${poolStats.queueDepth}`,
+                `⚡ ${poolStats.requestsThisMinute}/min`,
+              ].join('\n'), inline: true },
+              { name: 'Sessions', value: [
+                `Active: **${sessions.length}**`,
+                `Users: **${new Set(sessions.map((s) => s.userId)).size}**`,
+              ].join('\n'), inline: true },
+            )
+            .addFields(
+              { name: 'Usage — Today', value: [
+                `${todayUsage.totalRequests} requests`,
+                `${formatTokens(todayUsage.totalTokensIn)} in / ${formatTokens(todayUsage.totalTokensOut)} out`,
+                todayUsage.totalCostUsd > 0 ? formatCost(todayUsage.totalCostUsd) : '',
+              ].filter(Boolean).join('\n'), inline: true },
+              { name: 'Usage — 7 Days', value: [
+                `${weekUsage.totalRequests} requests`,
+                `${formatTokens(weekUsage.totalTokensIn)} in / ${formatTokens(weekUsage.totalTokensOut)} out`,
+                weekUsage.totalCostUsd > 0 ? formatCost(weekUsage.totalCostUsd) : '',
+              ].filter(Boolean).join('\n'), inline: true },
+            )
+            .setTimestamp();
 
-          // Per-model breakdown for the week
+          // Per-model breakdown
           const modelEntries = Object.entries(weekUsage.models);
           if (modelEntries.length > 0) {
-            msg.push('', '**By model (7d):**');
-            for (const [model, stats] of modelEntries) {
-              msg.push(`> \`${model}\` — ${stats.requests} req, ${stats.tokensIn.toLocaleString()} in / ${stats.tokensOut.toLocaleString()} out`);
-            }
+            const modelLines = modelEntries.map(
+              ([model, stats]) =>
+                `\`${model}\` — ${stats.requests} req, ${formatTokens(stats.tokensIn)} in / ${formatTokens(stats.tokensOut)} out`,
+            );
+            embed.addFields({ name: 'By Model (7d)', value: modelLines.join('\n') });
           }
 
-          await interaction.reply({ content: msg.join('\n'), ephemeral: true });
+          await interaction.reply({ embeds: [embed], ephemeral: true });
           break;
         }
 
         case 'prune': {
           const pruned = sessionManager.pruneStale();
           await interaction.reply({
-            content: `Pruned ${pruned} stale session(s).`,
+            embeds: [successEmbed(`Pruned **${pruned}** stale session(s).`)],
             ephemeral: true,
           });
           break;
@@ -195,7 +224,9 @@ export function createAdminCommand(
           const role = interaction.options.getRole('role', true);
           addAllowedRole(role.id, role.name);
           await interaction.reply({
-            content: `Role **${role.name}** added. Only users with allowed roles (or admins) can now use the bot.`,
+            embeds: [successEmbed(`Role **${role.name}** added.`).setDescription(
+              `Role **${role.name}** added. Only users with allowed roles (or admins) can now use the bot.`,
+            )],
             ephemeral: true,
           });
           break;
@@ -206,12 +237,13 @@ export function createAdminCommand(
           const removed = removeAllowedRole(role.id);
           const roles = listAllowedRoles();
           const note = roles.length === 0
-            ? ' No roles remain — the bot is now open to everyone.'
+            ? '\nNo roles remain — the bot is now open to everyone.'
             : '';
+
           await interaction.reply({
-            content: removed
-              ? `Role **${role.name}** removed.${note}`
-              : `Role **${role.name}** was not in the allowed list.`,
+            embeds: [removed
+              ? successEmbed(`Role **${role.name}** removed.${note}`)
+              : new EmbedBuilder().setColor(BotColors.Warning).setDescription(`Role **${role.name}** was not in the allowed list.`)],
             ephemeral: true,
           });
           break;
@@ -222,7 +254,9 @@ export function createAdminCommand(
           config.set('GITHUB_TOKEN', token);
           const masked = token.slice(0, 6) + '...' + token.slice(-4);
           await interaction.reply({
-            content: `GitHub token set: \`${masked}\`. It will be used for all future repo fetches.`,
+            embeds: [successEmbed(`GitHub token set: \`${masked}\``).addFields(
+              { name: 'Scope', value: 'All future repo fetches', inline: true },
+            )],
             ephemeral: true,
           });
           break;
@@ -230,10 +264,12 @@ export function createAdminCommand(
 
         case 'verifygittoken': {
           if (!config.GITHUB_TOKEN) {
-            await interaction.reply({
-              content: '**GitHub Token:** Not set.\nUse `/admin setgittoken` or set the `GITHUB_TOKEN` environment variable.',
-              ephemeral: true,
-            });
+            const embed = new EmbedBuilder()
+              .setColor(BotColors.Warning)
+              .setTitle('GitHub Token')
+              .setDescription('Not set. Use `/admin setgittoken` or set the `GITHUB_TOKEN` environment variable.')
+              .setTimestamp();
+            await interaction.reply({ embeds: [embed], ephemeral: true });
             return;
           }
 
@@ -244,20 +280,31 @@ export function createAdminCommand(
             const octokit = new Octokit({ auth: config.GITHUB_TOKEN, request: { timeout: 10_000 } });
             const { data: user } = await octokit.users.getAuthenticated();
             const scopes = (await octokit.request('GET /user')).headers['x-oauth-scopes'] || 'unknown';
-            await interaction.editReply(
-              `**GitHub Token:** Valid\n` +
-              `**User:** ${user.login}\n` +
-              `**Token:** \`${masked}\`\n` +
-              `**Scopes:** \`${scopes}\``,
-            );
+
+            const embed = new EmbedBuilder()
+              .setColor(BotColors.Success)
+              .setTitle('GitHub Token — Valid')
+              .addFields(
+                { name: 'User', value: user.login, inline: true },
+                { name: 'Token', value: `\`${masked}\``, inline: true },
+                { name: 'Scopes', value: `\`${scopes}\``, inline: false },
+              )
+              .setTimestamp();
+
+            await interaction.editReply({ embeds: [embed] });
           } catch (err: any) {
             const status = err.status || 'unknown';
             const msg = err.message || 'Unknown error';
-            await interaction.editReply(
-              `**GitHub Token:** Invalid\n` +
-              `**Token:** \`${masked}\`\n` +
-              `**Error:** ${status} — ${msg}`,
-            );
+            const embed = new EmbedBuilder()
+              .setColor(BotColors.Error)
+              .setTitle('GitHub Token — Invalid')
+              .addFields(
+                { name: 'Token', value: `\`${masked}\``, inline: true },
+                { name: 'Error', value: `${status} — ${msg}`, inline: false },
+              )
+              .setTimestamp();
+
+            await interaction.editReply({ embeds: [embed] });
           }
           break;
         }
@@ -265,18 +312,25 @@ export function createAdminCommand(
         case 'roles': {
           const roles = listAllowedRoles();
           if (roles.length === 0) {
-            await interaction.reply({
-              content: 'No role restrictions — everyone can use the bot.\nUse `/admin allowrole @role` to restrict access.',
-              ephemeral: true,
-            });
+            const embed = new EmbedBuilder()
+              .setColor(BotColors.Neutral)
+              .setTitle('Allowed Roles')
+              .setDescription('No role restrictions — everyone can use the bot.\nUse `/admin allowrole @role` to restrict access.')
+              .setTimestamp();
+            await interaction.reply({ embeds: [embed], ephemeral: true });
             return;
           }
 
-          const lines = roles.map((r) => `• <@&${r.role_id}> (\`${r.role_name}\`)`);
-          await interaction.reply({
-            content: `**Allowed roles (${roles.length}):**\n${lines.join('\n')}\n\nAdmins always have access. Use \`/admin denyrole @role\` to remove.`,
-            ephemeral: true,
-          });
+          const embed = new EmbedBuilder()
+            .setColor(BotColors.Admin)
+            .setTitle(`Allowed Roles (${roles.length})`)
+            .setDescription(
+              roles.map((r) => `<@&${r.role_id}> (\`${r.role_name}\`)`).join('\n') +
+              '\n\nAdmins always have access. Use `/admin denyrole @role` to remove.',
+            )
+            .setTimestamp();
+
+          await interaction.reply({ embeds: [embed], ephemeral: true });
           break;
         }
       }

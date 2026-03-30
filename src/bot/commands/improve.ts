@@ -9,6 +9,7 @@ import { RateLimiter } from '../middleware/rateLimiter.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { logger } from '../../utils/logger.js';
 import { config } from '../../config.js';
+import { rateLimitEmbed } from '../../utils/embedHelpers.js';
 import type { CommandHandler } from './types.js';
 
 /**
@@ -56,12 +57,12 @@ export function createImproveCommand(aiClient: AIClient, rateLimiter: RateLimite
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null)) {
+      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
         await interaction.reply({ content: 'You do not have a role that allows using this bot.', ephemeral: true });
         return;
       }
       if (!rateLimiter.check(interaction.user.id)) {
-        await interaction.reply({ content: 'Rate limit exceeded. Please wait a moment.', ephemeral: true });
+        await interaction.reply({ embeds: [rateLimitEmbed(rateLimiter.getInfo(interaction.user.id))], ephemeral: true });
         return;
       }
 

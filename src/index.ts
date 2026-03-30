@@ -5,6 +5,7 @@ import { handleReady } from './bot/events/ready.js';
 import { handleInteractionCreate } from './bot/events/interactionCreate.js';
 import { handleMessageCreate } from './bot/events/messageCreate.js';
 import { handleReactionAdd } from './bot/events/reactionAdd.js';
+import { handleGithubLinkDetect } from './bot/events/githubLinkDetect.js';
 import { registerCommands } from './bot/commands/registry.js';
 import { createAskCommand } from './bot/commands/ask.js';
 import { createCodeCommand } from './bot/commands/code.js';
@@ -25,6 +26,8 @@ import { createImproveCommand } from './bot/commands/improve.js';
 import { createStatusCommand } from './bot/commands/status.js';
 import { createRetryCommand } from './bot/commands/retry.js';
 import { createPersonaCommand } from './bot/commands/persona.js';
+import { createAllowDmsCommand } from './bot/commands/allowdms.js';
+import { createBaseBranchCommand } from './bot/commands/basebranch.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
@@ -70,6 +73,8 @@ async function main() {
     createStatusCommand(sessionManager),
     createRetryCommand(sessionManager, aiClient, rateLimiter),
     createPersonaCommand(sessionManager),
+    createAllowDmsCommand(),
+    createBaseBranchCommand(sessionManager),
   ];
 
   const commandMap = new Map<string, CommandHandler>();
@@ -88,6 +93,7 @@ async function main() {
   handleInteractionCreate(client, commandMap);
   handleMessageCreate(client, sessionManager, aiClient, rateLimiter, repoFetcher);
   handleReactionAdd(client, sessionManager);
+  handleGithubLinkDetect(client);
 
   // Login
   await client.login(config.DISCORD_TOKEN);

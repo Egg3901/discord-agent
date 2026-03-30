@@ -1,9 +1,12 @@
 import { type GuildMember, PermissionFlagsBits } from 'discord.js';
 import { getDatabase } from '../../storage/database.js';
+import { isDmAllowlisted } from '../../storage/database.js';
+import { logger } from '../../utils/logger.js';
 
 /**
  * Check if a user has admin privileges.
  * Uses Discord's built-in Administrator permission.
+ * Always returns false in DM context (no guild member).
  */
 export function isAdmin(member: GuildMember | null): boolean {
   if (!member) return false;
@@ -14,15 +17,34 @@ export function isAdmin(member: GuildMember | null): boolean {
  * Check if a user is allowed to use the bot.
  * If no roles are configured in allowed_roles, everyone can use it.
  * If roles are configured, user must have one of them (or be admin).
+ *
+ * For DM contexts (member is null), checks the DM allowlist by userId.
  */
-export function isAllowed(member: GuildMember | null): boolean {
-  if (!member) return false;
-  if (isAdmin(member)) return true;
+export function isAllowed(member: GuildMember | null, userId?: string): boolean {
+  if (member) {
+    if (isAdmin(member)) return true;
+    const allowedRoles = getAllowedRoles();
+    if (allowedRoles.length === 0) return true; // No restriction
+    return member.roles.cache.some((role) => allowedRoles.includes(role.id));
+  }
 
-  const allowedRoles = getAllowedRoles();
-  if (allowedRoles.length === 0) return true; // No restriction
+  // DM context: no guild member available
+  if (userId) {
+    const allowed = isDmAllowlisted(userId);
+    if (!allowed) {
+      logger.debug({ userId }, 'DM interaction denied: user not on allowlist');
+    }
+    return allowed;
+  }
 
-  return member.roles.cache.some((role) => allowedRoles.includes(role.id));
+  return false;
+}
+
+/**
+ * Check if a user is allowed to use the bot in a DM context.
+ */
+export function isDmUser(userId: string): boolean {
+  return isDmAllowlisted(userId);
 }
 
 // --- Role management (stored in SQLite, cached in memory) ---
