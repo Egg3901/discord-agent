@@ -162,6 +162,18 @@ export class SessionManager {
           }
         }
 
+        // Derive secondary repo owner/name from secondary repo context
+        const secondaryRepoContext = row.secondary_repo_context ? JSON.parse(row.secondary_repo_context) : undefined;
+        let secondaryRepoOwner: string | undefined;
+        let secondaryRepoName: string | undefined;
+        if (secondaryRepoContext?.repoUrl) {
+          const match = secondaryRepoContext.repoUrl.match(/github\.com\/([^/]+)\/([^/.]+)/);
+          if (match) {
+            secondaryRepoOwner = match[1];
+            secondaryRepoName = match[2];
+          }
+        }
+
         const session: Session = {
           id: row.id,
           userId: row.user_id,
@@ -171,6 +183,9 @@ export class SessionManager {
           repoContext,
           repoOwner,
           repoName,
+          secondaryRepoContext,
+          secondaryRepoOwner,
+          secondaryRepoName,
           modelOverride: row.model_override || undefined,
           thinkingEnabled: row.thinking_enabled != null ? !!row.thinking_enabled : null,
           thinkingBudget: row.thinking_budget || null,
@@ -194,8 +209,8 @@ export class SessionManager {
       const db = getDatabase();
       db.prepare(`
         INSERT OR REPLACE INTO sessions
-          (id, user_id, thread_id, channel_id, messages, repo_context, model_override, thinking_enabled, thinking_budget, system_prompt, created_at, last_active_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, user_id, thread_id, channel_id, messages, repo_context, model_override, thinking_enabled, thinking_budget, system_prompt, secondary_repo_context, created_at, last_active_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         session.id,
         session.userId,
@@ -207,6 +222,7 @@ export class SessionManager {
         session.thinkingEnabled != null ? (session.thinkingEnabled ? 1 : 0) : null,
         session.thinkingBudget || null,
         session.systemPrompt || null,
+        session.secondaryRepoContext ? JSON.stringify(session.secondaryRepoContext) : null,
         session.createdAt,
         session.lastActiveAt,
       );

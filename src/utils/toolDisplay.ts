@@ -39,6 +39,23 @@ export const TOOL_EMOJIS: Record<string, string> = {
   find_replace_all: '\u{1F504}',
   download_file: '\u{2B07}\uFE0F',
   run_tests: '\u{1F9EA}',
+  // Secondary repo tools (dual-repo /synthesize sessions)
+  secondary_read_file: '\u{1F4C4}',
+  secondary_list_directory: '\u{1F4C2}',
+  secondary_search_code: '\u{1F50D}',
+  secondary_search_files: '\u{1F50D}',
+  secondary_read_files_batch: '\u{1F4C4}',
+  secondary_analyze_code: '\u{1F9EC}',
+  secondary_clone: '\u{1F4E5}',
+  secondary_patch_file: '\u{1FA79}',
+  secondary_git_status: '\u{1F4CB}',
+  secondary_git_diff: '\u{1F504}',
+  secondary_git_add: '\u{2795}',
+  secondary_git_commit: '\u{2705}',
+  secondary_git_push: '\u{2B06}\uFE0F',
+  secondary_git_branch: '\u{1F500}',
+  secondary_git_checkout: '\u{1F500}',
+  secondary_create_pr: '\u{1F4E4}',
 };
 
 /** Human-readable label per tool name */
@@ -77,6 +94,23 @@ export const TOOL_LABELS: Record<string, string> = {
   find_replace_all: 'Find & replace',
   download_file: 'Downloading',
   run_tests: 'Running tests',
+  // Secondary repo tools
+  secondary_read_file: '[2nd] Reading',
+  secondary_list_directory: '[2nd] Listing',
+  secondary_search_code: '[2nd] Searching',
+  secondary_search_files: '[2nd] Searching files',
+  secondary_read_files_batch: '[2nd] Reading files',
+  secondary_analyze_code: '[2nd] Analyzing',
+  secondary_clone: '[2nd] Cloning',
+  secondary_patch_file: '[2nd] Patching',
+  secondary_git_status: '[2nd] Git status',
+  secondary_git_diff: '[2nd] Git diff',
+  secondary_git_add: '[2nd] Git add',
+  secondary_git_commit: '[2nd] Git commit',
+  secondary_git_push: '[2nd] Git push',
+  secondary_git_branch: '[2nd] Git branch',
+  secondary_git_checkout: '[2nd] Git checkout',
+  secondary_create_pr: '[2nd] Creating PR',
 };
 
 /**
@@ -147,8 +181,14 @@ export function formatToolDetail(name: string, input: Record<string, unknown>): 
       return input.path ? `→ \`${String(input.path)}\`` : '';
     case 'run_tests':
       return input.file ? `\`${String(input.file).slice(0, 60)}\`` : 'all tests';
-    default:
+    default: {
+      // Handle secondary_* tools by stripping prefix and re-routing
+      if (name.startsWith('secondary_')) {
+        const baseName = name.slice('secondary_'.length);
+        return formatToolDetail(baseName, input);
+      }
       return '';
+    }
   }
 }
 

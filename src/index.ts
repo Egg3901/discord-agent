@@ -30,6 +30,7 @@ import { createRetryCommand } from './bot/commands/retry.js';
 import { createPersonaCommand } from './bot/commands/persona.js';
 import { createAllowDmsCommand } from './bot/commands/allowdms.js';
 import { createBaseBranchCommand } from './bot/commands/basebranch.js';
+import { createSynthesizeCommand } from './bot/commands/synthesize.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
@@ -77,6 +78,7 @@ async function main() {
     createPersonaCommand(sessionManager),
     createAllowDmsCommand(),
     createBaseBranchCommand(sessionManager),
+    createSynthesizeCommand(sessionManager, aiClient, rateLimiter, repoFetcher),
   ];
 
   const commandMap = new Map<string, CommandHandler>();
@@ -84,7 +86,6 @@ async function main() {
     commandMap.set(cmd.data.name, cmd);
   }
 
-createContextCommand(sessionManager),
   // Register slash commands with Discord
   await registerCommands(commands);
 

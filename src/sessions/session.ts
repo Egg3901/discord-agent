@@ -22,6 +22,12 @@ export interface Session {
   // Custom system prompt override (persona)
   systemPrompt?: string;
 
+  // Secondary repo (for /synthesize dual-repo sessions)
+  secondaryRepoOwner?: string;
+  secondaryRepoName?: string;
+  secondaryRepoContext?: RepoContext;
+  secondaryDefaultBranch?: string;
+
   // Abort controller for cancelling in-flight requests
   activeController?: AbortController;
 

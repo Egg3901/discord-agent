@@ -188,6 +188,74 @@ ${disabledFeatures.map((f) => `- ${f}`).join('\n')}`;
 }
 
 /**
+ * Build an enhanced system prompt for /synthesize dual-repo sessions.
+ * Adds secondary repo context and explains the dual-repo tool layout.
+ */
+export function buildSynthesizeSystemPrompt(
+  primaryRepoContext: RepoContext,
+  secondaryRepoContext: RepoContext,
+  toolsEnabled: boolean,
+  scriptEnabled: boolean,
+  devToolsEnabled: boolean,
+  webSearchEnabled: boolean,
+  customPrompt?: string,
+): string {
+  // Start with the base system prompt using primary repo context
+  let prompt = buildSystemPrompt(
+    primaryRepoContext,
+    toolsEnabled,
+    scriptEnabled,
+    devToolsEnabled,
+    webSearchEnabled,
+    customPrompt,
+  );
+
+  // Add the dual-repo synthesis section
+  prompt += `
+
+**DUAL-REPO SYNTHESIS MODE**
+This is a /synthesize session with access to TWO repositories:
+- **Primary repo** (editable): \`${primaryRepoContext.repoUrl}\` — use standard tools (\`read_file\`, \`list_directory\`, \`search_code\`, \`patch_file\`, \`git_*\`, \`create_pr\`, etc.)
+- **Secondary repo** (read-only by default): \`${secondaryRepoContext.repoUrl}\` — use \`secondary_*\` prefixed tools (\`secondary_read_file\`, \`secondary_list_directory\`, \`secondary_search_code\`, etc.)
+
+**How to use dual repos:**
+1. You can read from both repos simultaneously to understand APIs, data models, endpoints, and shared contracts.
+2. All edits, commits, and PRs go to the **primary** repo by default.
+3. To edit the **secondary** repo, the user must explicitly ask. Then use \`secondary_clone\` first, followed by \`secondary_patch_file\`, \`secondary_git_*\`, and \`secondary_create_pr\`.
+4. Use cross-repo context to write code in the primary repo that integrates with the secondary repo's APIs, data structures, or interfaces.
+
+**Secondary repo tools available:**
+- \`secondary_read_file(path)\`: Read a file from the secondary repo
+- \`secondary_list_directory(path)\`: List entries in the secondary repo
+- \`secondary_search_code(query)\`: Search code in the secondary repo
+- \`secondary_search_files(pattern)\`: Find files by glob in the secondary repo
+- \`secondary_read_files_batch(paths)\`: Read multiple files from the secondary repo
+- \`secondary_analyze_code(analysis_type, symbol?, file?)\`: Analyze code structure in the secondary repo
+
+**Secondary repo dev tools** (available after \`secondary_clone\`):
+- \`secondary_clone()\`: Clone the secondary repo for editing
+- \`secondary_patch_file(path, edits)\`: Edit files in the secondary repo
+- \`secondary_git_status/diff/add/commit/push/branch/checkout\`: Git operations on secondary repo
+- \`secondary_create_pr(title?, body?, base?, draft?)\`: Create a PR on the secondary repo
+
+**Workflow guidance:**
+- Start by exploring both repos to understand their relationship (APIs, shared types, data models).
+- When the user asks to build something, check the secondary repo's API/endpoints/types first, then implement in the primary.
+- When suggesting API integrations, verify the actual endpoint signatures and data shapes from the secondary repo rather than guessing.
+- If the user says "also update the site" or "PR on the other repo", use the secondary dev tools.`;
+
+  // Add secondary repo initial context
+  if (secondaryRepoContext.files.length > 0) {
+    prompt += `\n\n**Secondary repository initial context** (${secondaryRepoContext.repoUrl}):\n`;
+    for (const file of secondaryRepoContext.files) {
+      prompt += `\n--- [SECONDARY] ${file.path} ---\n\`\`\`\n${file.content}\n\`\`\`\n`;
+    }
+  }
+
+  return prompt;
+}
+
+/**
  * Estimate token count (rough: ~4 chars per token).
  */
 export function estimateTokens(content: string | ContentBlock[]): number {
