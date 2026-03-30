@@ -20,6 +20,8 @@ import { createVersionCommand } from './bot/commands/version.js';
 import { createThinkingCommand } from './bot/commands/thinking.js';
 import { createCancelCommand } from './bot/commands/cancel.js';
 import { createSandboxCommand } from './bot/commands/sandbox.js';
+import { createContextCommand } from './bot/commands/context.js';
+import { createSuggestCommand } from './bot/commands/suggest.js';
 import { createExportCommand } from './bot/commands/export.js';
 import { createReviewCommand } from './bot/commands/review.js';
 import { createImproveCommand } from './bot/commands/improve.js';
@@ -82,6 +84,7 @@ async function main() {
     commandMap.set(cmd.data.name, cmd);
   }
 
+createContextCommand(sessionManager),
   // Register slash commands with Discord
   await registerCommands(commands);
 
