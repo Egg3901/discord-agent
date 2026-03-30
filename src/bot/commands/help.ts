@@ -55,6 +55,7 @@ const pages: { title: string; emoji: string; embed: () => EmbedBuilder }[] = [
             '`/repo <url> [paths]` — Attach GitHub repo context',
             '`/persona set/clear/show` — Custom system prompt',
             '`/thinking on/off [budget]` — Extended thinking toggle',
+            '`/basebranch [branch]` — Set/view base branch for PRs',
             '`/sandbox [path]` — List sandbox workspace files',
           ].join('\n') },
           { name: 'Info', value: [
