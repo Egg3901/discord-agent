@@ -85,12 +85,12 @@ export function createSuggestCommand(
         // If no code provided, try to use session context
         if (!codeToAnalyze) {
           const session = sessionManager.getByThread(interaction.channelId);
-          if (session && session.repo && session.repo.files.length > 0) {
+          if (session && session.repoContext && session.repoContext.files.length > 0) {
             // Concatenate all files for analysis
-            codeToAnalyze = session.repo.files
-              .map(file => `// File: ${file.path}\n${file.content}`)
+            codeToAnalyze = session.repoContext.files
+              .map((file: { path: string; content: string }) => `// File: ${file.path}\n${file.content}`)
               .join('\n\n');
-            sessionContext = `Repository: ${session.repo.repoUrl}\n`;
+            sessionContext = `Repository: ${session.repoContext.repoUrl}\n`;
           } else {
             await interaction.editReply({
               content: 'Please provide code to analyze or ensure you have an active session with a repository attached.',
@@ -101,10 +101,9 @@ export function createSuggestCommand(
 
         // Create messages array with our code suggestion system prompt
         const messages = [
-          { role: 'system' as const, content: CODE_SUGGESTION_SYSTEM },
-          { 
-            role: 'user' as const, 
-            content: `Code to analyze:\n\`\`\`${language || ''}\n${codeToAnalyze}\n\`\`\`\n\n${sessionContext}Please provide prioritized suggestions for improvement.` 
+          {
+            role: 'user' as const,
+            content: `${CODE_SUGGESTION_SYSTEM}\n\nCode to analyze:\n\`\`\`${language || ''}\n${codeToAnalyze}\n\`\`\`\n\n${sessionContext}Please provide prioritized suggestions for improvement.`
           },
         ];
 

@@ -81,7 +81,6 @@ export function createContextCommand(sessionManager: SessionManager): CommandHan
         if (!session) {
           await interaction.editReply({
             content: 'No active session in this thread. Use `/code` to start one.',
-            ephemeral: true,
           });
           return;
         }
@@ -98,10 +97,10 @@ export function createContextCommand(sessionManager: SessionManager): CommandHan
         });
         
         // Repository context
-        if (session.repo) {
+        if (session.repoContext) {
           fields.push({
             name: '📚 Repository',
-            value: `[${session.repo.repoUrl}](${session.repo.repoUrl})\n${session.repo.files.length} files attached`,
+            value: `[${session.repoContext.repoUrl}](${session.repoContext.repoUrl})\n${session.repoContext.files.length} files attached`,
             inline: true
           });
         } else {
@@ -114,7 +113,7 @@ export function createContextCommand(sessionManager: SessionManager): CommandHan
         
         // Tools status
         const tools = [];
-        if (session.repo) tools.push('repo');
+        if (session.repoContext) tools.push('repo');
         if (config.ENABLE_SCRIPT_EXECUTION) tools.push('sandbox');
         if (config.ENABLE_DEV_TOOLS) tools.push('dev');
         if (config.ENABLE_WEB_SEARCH) tools.push('web');
@@ -132,17 +131,8 @@ export function createContextCommand(sessionManager: SessionManager): CommandHan
           inline: true
         });
         
-        // Token usage (if available)
-        if (session.tokenUsage) {
-          fields.push({
-            name: '📊 Token Usage',
-            value: `In: ${session.tokenUsage.tokensIn.toLocaleString()}\nOut: ${session.tokenUsage.tokensOut.toLocaleString()}`,
-            inline: true
-          });
-        }
-        
-        // Custom persona
-        if (session.persona) {
+        // Custom system prompt (persona)
+        if (session.systemPrompt) {
           fields.push({
             name: '👤 Persona',
             value: 'Custom persona active',
