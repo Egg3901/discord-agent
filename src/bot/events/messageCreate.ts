@@ -157,6 +157,7 @@ export function handleMessageCreate(
 
       try {
         const hasRepo = session.repoOwner && session.repoName;
+        const hasSecondaryRepo = !!(session.secondaryRepoOwner && session.secondaryRepoName);
         const hasWebSearch = config.ENABLE_WEB_SEARCH;
         const hasTools = hasRepo || config.ENABLE_SCRIPT_EXECUTION || config.ENABLE_DEV_TOOLS || hasWebSearch;
 
@@ -175,12 +176,14 @@ export function handleMessageCreate(
         // Common stream options with thinking overrides and abort signal
         const baseStreamOptions = {
           repoContext: session.repoContext,
+          secondaryRepoContext: session.secondaryRepoContext,
           modelOverride: session.modelOverride,
           thinkingEnabled: session.thinkingEnabled,
           thinkingBudget: session.thinkingBudget,
           signal: controller.signal,
           imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
           enableWebSearch: hasWebSearch,
+          enableSecondaryRepo: hasSecondaryRepo,
           sessionId: session.id,
           customSystemPrompt: session.systemPrompt,
           onQueuePosition: (pos: number) => {
@@ -251,6 +254,15 @@ export function handleMessageCreate(
             session.repoContext?.repoUrl,
             session.defaultBranch,
           );
+          // Attach secondary repo if this is a /synthesize session
+          if (hasSecondaryRepo) {
+            toolExecutor.setSecondaryRepo(
+              session.secondaryRepoOwner!,
+              session.secondaryRepoName!,
+              session.secondaryRepoContext?.repoUrl,
+              session.secondaryDefaultBranch,
+            );
+          }
           let lastToolMsg: import('discord.js').Message | null = null;
           let agentToolCount = 0;
           const agentToolNames: string[] = [];
@@ -260,7 +272,7 @@ export function handleMessageCreate(
             aiClient,
             session.messages,
             toolExecutor,
-            { ...baseStreamOptions, enableRepoTools: !!hasRepo },
+            { ...baseStreamOptions, enableRepoTools: !!hasRepo, enableSecondaryRepo: hasSecondaryRepo },
             {
               onTextChunk: async (text) => {
                 // If tools were used, detach so the final response is a new message

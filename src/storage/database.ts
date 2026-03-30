@@ -95,6 +95,11 @@ function runMigrations(db: Database.Database): void {
     db.exec('ALTER TABLE sessions ADD COLUMN system_prompt TEXT');
   }
 
+  // Migration: add secondary_repo_context column to sessions if missing
+  if (!sessionCols.some((c: any) => c.name === 'secondary_repo_context')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN secondary_repo_context TEXT');
+  }
+
   // Migration: claude_code_sessions table for cross-restart CC session continuity
   db.exec(`
     CREATE TABLE IF NOT EXISTS claude_code_sessions (

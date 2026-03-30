@@ -17,6 +17,20 @@ const WEB_TOOL_NAMES = new Set(['web_search', 'web_fetch']);
 const INTERACTIVE_TOOL_NAMES = new Set(['request_input']);
 const GITHUB_TOOL_NAMES = new Set(['create_pr', 'read_github_issue', 'create_github_issue']);
 
+/** Secondary repo read-only tool names (routed to secondary repo fetcher). */
+const SECONDARY_REPO_TOOL_NAMES = new Set([
+  'secondary_read_file', 'secondary_list_directory', 'secondary_search_code',
+  'secondary_search_files', 'secondary_read_files_batch', 'secondary_analyze_code',
+]);
+
+/** Secondary repo dev tool names (require secondary clone). */
+const SECONDARY_DEV_TOOL_NAMES = new Set([
+  'secondary_clone', 'secondary_patch_file',
+  'secondary_git_status', 'secondary_git_diff', 'secondary_git_add',
+  'secondary_git_commit', 'secondary_git_push', 'secondary_git_branch',
+  'secondary_git_checkout', 'secondary_create_pr',
+]);
+
 /** Special result type for request_input - signals the agent loop to pause */
 export const REQUEST_INPUT_RESULT = Symbol('REQUEST_INPUT');
 
@@ -33,6 +47,16 @@ export class ToolExecutor {
   private treeCache: string[] | null = null;
   private gitWorkspaceReady = false;
 
+  // Secondary repo support (for /synthesize dual-repo sessions)
+  private secondaryOwner: string = '';
+  private secondaryRepo: string = '';
+  private secondaryRepoUrl?: string;
+  private secondaryDefaultBranch?: string;
+  private secondarySandboxDir: string | null = null;
+  private secondaryDevExecutor: DevToolExecutor | null = null;
+  private secondaryTreeCache: string[] | null = null;
+  private secondaryGitWorkspaceReady = false;
+
   constructor(
     private repoFetcher: RepoFetcher | null,
     private owner: string,
@@ -41,6 +65,16 @@ export class ToolExecutor {
     private repoUrl?: string,
     private defaultBranch?: string,
   ) {}
+
+  /**
+   * Attach a secondary repository for dual-repo /synthesize sessions.
+   */
+  setSecondaryRepo(owner: string, repo: string, repoUrl?: string, defaultBranch?: string): void {
+    this.secondaryOwner = owner;
+    this.secondaryRepo = repo;
+    this.secondaryRepoUrl = repoUrl;
+    this.secondaryDefaultBranch = defaultBranch;
+  }
 
   /**
    * Get or lazily create the sandbox directory for this session.
@@ -60,6 +94,22 @@ export class ToolExecutor {
     return this.sandboxDir;
   }
 
+  /**
+   * Get or lazily create the secondary sandbox directory.
+   */
+  private async getSecondarySandbox(): Promise<string> {
+    if (!this.secondarySandboxDir) {
+      // Use a distinct sandbox ID so primary and secondary don't collide
+      this.secondarySandboxDir = await getSandboxDir(this.sessionId ? `${this.sessionId}-secondary` : undefined);
+    }
+    if (!this.secondaryGitWorkspaceReady && this.secondaryRepoUrl && config.ENABLE_DEV_TOOLS) {
+      this.secondaryGitWorkspaceReady = true;
+      const result = await ensureGitWorkspace(this.secondarySandboxDir, this.secondaryRepoUrl);
+      logger.info({ repoUrl: this.secondaryRepoUrl, sandboxDir: this.secondarySandboxDir, ...result }, 'Secondary git workspace setup');
+    }
+    return this.secondarySandboxDir;
+  }
+
   async execute(
     toolName: string,
     input: Record<string, unknown>,
@@ -68,6 +118,31 @@ export class ToolExecutor {
     try {
       if (!input || typeof input !== 'object') {
         return 'Error: Invalid tool input';
+      }
+
+      // Route secondary repo read-only tools
+      if (SECONDARY_REPO_TOOL_NAMES.has(toolName)) {
+        if (!this.repoFetcher || !this.secondaryOwner || !this.secondaryRepo) {
+          return 'Error: No secondary repository attached. This tool is only available in /synthesize sessions.';
+        }
+        const result = await this.executeSecondaryRepoTool(toolName, input);
+        const duration = Date.now() - startTime;
+        logger.debug({ toolName, duration }, 'Secondary repo tool executed');
+        return result;
+      }
+
+      // Route secondary repo dev tools
+      if (SECONDARY_DEV_TOOL_NAMES.has(toolName)) {
+        if (!this.secondaryOwner || !this.secondaryRepo) {
+          return 'Error: No secondary repository attached. This tool is only available in /synthesize sessions.';
+        }
+        if (!config.ENABLE_DEV_TOOLS) {
+          return 'Error: Dev tools are disabled. An admin can enable them with `/config set ENABLE_DEV_TOOLS true`.';
+        }
+        const result = await this.executeSecondaryDevTool(toolName, input);
+        const duration = Date.now() - startTime;
+        logger.debug({ toolName, duration }, 'Secondary dev tool executed');
+        return result;
       }
 
       // Route interactive tools (special handling in agent loop)
@@ -462,6 +537,199 @@ export class ToolExecutor {
         : f.content;
       return `=== ${f.path} ===\n${content}`;
     }).join('\n\n');
+  }
+
+  // ---- Secondary repo tool execution ----
+
+  private async executeSecondaryRepoTool(toolName: string, input: Record<string, unknown>): Promise<string> {
+    const o = this.secondaryOwner;
+    const r = this.secondaryRepo;
+
+    switch (toolName) {
+      case 'secondary_read_file': {
+        const path = input.path;
+        if (typeof path !== 'string' || path.length === 0 || path.length > MAX_PATH_LENGTH) {
+          return 'Error: path must be a non-empty string (max 500 chars)';
+        }
+        const files = await this.repoFetcher!.fetchFiles(o, r, [path]);
+        if (files.length === 0) return `File not found in secondary repo: ${path}`;
+        const content = files[0].content;
+        return content.length > MAX_FILE_CONTENT
+          ? content.slice(0, MAX_FILE_CONTENT) + `\n\n[Truncated — ${Math.round(content.length / 1000)}KB]`
+          : content;
+      }
+      case 'secondary_list_directory': {
+        const path = input.path;
+        if (typeof path !== 'string' || path.length > MAX_PATH_LENGTH) {
+          return 'Error: path must be a string (max 500 chars)';
+        }
+        const entries = await this.repoFetcher!.listDirectory(o, r, path);
+        return entries.length === 0 ? `Directory is empty or not found: ${path || '/'}` : entries.join('\n');
+      }
+      case 'secondary_search_code': {
+        const query = input.query;
+        if (typeof query !== 'string' || query.length === 0 || query.length > MAX_QUERY_LENGTH) {
+          return 'Error: query must be a non-empty string (max 200 chars)';
+        }
+        const results = await this.repoFetcher!.searchCode(o, r, query);
+        if (results.length === 0) return `No results found in secondary repo for: ${query}`;
+        return results.map((res: { path: string; snippet: string }, i: number) =>
+          `[${i + 1}] ${res.path}\n${res.snippet}`).join('\n\n---\n\n');
+      }
+      case 'secondary_search_files': {
+        const pattern = input.pattern;
+        if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > MAX_QUERY_LENGTH) {
+          return 'Error: pattern must be a non-empty string (max 200 chars)';
+        }
+        if (!this.secondaryTreeCache) {
+          this.secondaryTreeCache = await this.repoFetcher!.getTree(o, r);
+        }
+        const regex = globToRegex(pattern);
+        const matches = this.secondaryTreeCache.filter((p) => regex.test(p));
+        if (matches.length === 0) return `No files matched pattern in secondary repo: ${pattern}`;
+        const limited = matches.slice(0, 50);
+        const suffix = matches.length > 50 ? `\n\n[${matches.length - 50} more results not shown]` : '';
+        return `${limited.length} file(s) matching \`${pattern}\`:\n${limited.join('\n')}${suffix}`;
+      }
+      case 'secondary_read_files_batch': {
+        const paths = input.paths;
+        if (typeof paths !== 'string' || paths.length === 0) {
+          return 'Error: paths must be a non-empty comma-separated string';
+        }
+        const pathList = paths.split(',').map((p) => p.trim()).filter(Boolean).slice(0, 10);
+        if (pathList.length === 0) return 'Error: no valid paths provided';
+        const files = await this.repoFetcher!.fetchFiles(o, r, pathList);
+        if (files.length === 0) return 'No files found for the given paths in secondary repo.';
+        return files.map((f) => {
+          const content = f.content.length > MAX_FILE_CONTENT
+            ? f.content.slice(0, MAX_FILE_CONTENT) + `\n\n[Truncated — ${Math.round(f.content.length / 1000)}KB]`
+            : f.content;
+          return `=== ${f.path} ===\n${content}`;
+        }).join('\n\n');
+      }
+      case 'secondary_analyze_code': {
+        return this.analyzeCodeOnRepo(o, r, input);
+      }
+      default:
+        return `Unknown secondary repo tool: ${toolName}`;
+    }
+  }
+
+  private async analyzeCodeOnRepo(owner: string, repo: string, input: Record<string, unknown>): Promise<string> {
+    const analysisType = input.analysis_type;
+    const symbol = typeof input.symbol === 'string' ? input.symbol : '';
+    const file = typeof input.file === 'string' ? input.file : '';
+    const includeTests = input.include_tests === true;
+
+    if (!['definitions', 'references', 'imports', 'callers', 'affected'].includes(analysisType as string)) {
+      return 'Error: analysis_type must be one of: definitions, references, imports, callers, affected';
+    }
+
+    switch (analysisType) {
+      case 'definitions': {
+        if (!symbol) return 'Error: symbol parameter is required for definitions analysis';
+        return findDefinitions(this.repoFetcher!, owner, repo, symbol, includeTests);
+      }
+      case 'references': {
+        if (!symbol) return 'Error: symbol parameter is required for references analysis';
+        return findReferences(this.repoFetcher!, owner, repo, symbol, includeTests);
+      }
+      case 'imports': {
+        if (!file) return 'Error: file parameter is required for imports analysis';
+        return analyzeImports(this.repoFetcher!, owner, repo, file);
+      }
+      case 'callers': {
+        if (!symbol) return 'Error: symbol parameter is required for callers analysis';
+        return findCallers(this.repoFetcher!, owner, repo, symbol, includeTests);
+      }
+      case 'affected': {
+        if (!file) return 'Error: file parameter is required for affected analysis';
+        return affectedFiles(this.repoFetcher!, owner, repo, file);
+      }
+      default:
+        return `Error: Unknown analysis type: ${analysisType}`;
+    }
+  }
+
+  private async executeSecondaryDevTool(toolName: string, input: Record<string, unknown>): Promise<string> {
+    if (toolName === 'secondary_clone') {
+      if (!this.secondaryRepoUrl) {
+        return 'Error: No secondary repository URL configured.';
+      }
+      try {
+        const sandbox = await this.getSecondarySandbox();
+        return `Secondary repository cloned to workspace. You can now use secondary_patch_file, secondary_git_*, and secondary_create_pr tools.\nWorkspace: ${sandbox}`;
+      } catch (err: any) {
+        return `Error cloning secondary repository: ${err.message || String(err)}`;
+      }
+    }
+
+    // All other secondary dev tools require the workspace to be cloned first
+    if (!this.secondarySandboxDir || !this.secondaryGitWorkspaceReady) {
+      return 'Error: Secondary repository has not been cloned yet. Use `secondary_clone` first.';
+    }
+
+    if (!this.secondaryDevExecutor) {
+      this.secondaryDevExecutor = new DevToolExecutor(this.secondarySandboxDir);
+    }
+
+    // Map secondary tool names to their primary equivalents for the DevToolExecutor
+    const toolMap: Record<string, string> = {
+      'secondary_patch_file': 'patch_file',
+      'secondary_git_status': 'git_status',
+      'secondary_git_diff': 'git_diff',
+      'secondary_git_add': 'git_add',
+      'secondary_git_commit': 'git_commit',
+      'secondary_git_push': 'git_push',
+      'secondary_git_branch': 'git_branch',
+      'secondary_git_checkout': 'git_checkout',
+    };
+
+    const mappedName = toolMap[toolName];
+    if (mappedName) {
+      return this.secondaryDevExecutor.execute(mappedName, input);
+    }
+
+    if (toolName === 'secondary_create_pr') {
+      if (!this.repoFetcher || !config.GITHUB_TOKEN) {
+        return 'Error: GITHUB_TOKEN is required for creating PRs.';
+      }
+      const { execSync } = await import('node:child_process');
+      let head: string;
+      try {
+        head = execSync('git rev-parse --abbrev-ref HEAD', {
+          cwd: this.secondarySandboxDir,
+          encoding: 'utf-8',
+          timeout: 5000,
+        }).trim();
+      } catch {
+        return 'Error: Could not determine current branch in secondary workspace.';
+      }
+
+      const base = (typeof input.base === 'string' && input.base)
+        ? input.base
+        : (this.secondaryDefaultBranch || 'main');
+      const title = (typeof input.title === 'string' && input.title)
+        ? input.title
+        : head.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const body = typeof input.body === 'string' ? input.body : '';
+      const draft = input.draft === true;
+
+      if (head === base) {
+        return `Error: Current branch "${head}" is the same as base "${base}". Create a feature branch first.`;
+      }
+
+      try {
+        const result = await this.repoFetcher.createPR(
+          this.secondaryOwner, this.secondaryRepo, head, base, title, body, draft,
+        );
+        return `PR created on secondary repo!\n**PR #${result.number}:** ${title}\n**URL:** ${result.url}`;
+      } catch (err: any) {
+        return `Error creating PR on secondary repo: ${err.message || String(err)}`;
+      }
+    }
+
+    return `Unknown secondary dev tool: ${toolName}`;
   }
 }
 

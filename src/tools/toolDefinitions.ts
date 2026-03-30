@@ -674,6 +674,243 @@ export const INTERACTIVE_TOOLS: ToolDefinition[] = [
 ];
 
 /**
+ * Secondary repo tools — mirror of AGENT_TOOLS for the secondary repository
+ * in /synthesize dual-repo sessions. Each tool operates on the secondary repo.
+ */
+export const SECONDARY_REPO_TOOLS: ToolDefinition[] = [
+  {
+    name: 'secondary_read_file',
+    description:
+      'Read the contents of a file from the SECONDARY repository. Returns the full file content (truncated at 50KB).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'File path relative to the secondary repository root (e.g. "src/index.ts")',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'secondary_list_directory',
+    description:
+      'List files and subdirectories at a given path in the SECONDARY repository.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Directory path relative to the secondary repository root. Use empty string "" for the root.',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'secondary_search_code',
+    description:
+      'Search for a text pattern across all files in the SECONDARY repository. Returns matching file paths and line snippets (up to 10 results).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query string (plain text, not regex)',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'secondary_search_files',
+    description:
+      'Find files in the SECONDARY repository by name or glob pattern. Returns matching file paths.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pattern: {
+          type: 'string',
+          description: 'Glob pattern to match against file paths (e.g. "*.ts", "src/**/*.json")',
+        },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'secondary_read_files_batch',
+    description:
+      'Read multiple files from the SECONDARY repository in a single call. Returns each file\'s content separated by headers.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        paths: {
+          type: 'string',
+          description: 'Comma-separated list of file paths relative to the secondary repo root',
+        },
+      },
+      required: ['paths'],
+    },
+  },
+  {
+    name: 'secondary_analyze_code',
+    description:
+      'Analyze code structure in the SECONDARY repository: find symbol definitions, locate references, trace imports, find callers, or identify affected files.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        analysis_type: {
+          type: 'string',
+          description: 'Type of analysis: "definitions", "references", "imports", "callers", "affected"',
+        },
+        symbol: {
+          type: 'string',
+          description: 'Symbol name to analyze (for definitions, references, callers)',
+        },
+        file: {
+          type: 'string',
+          description: 'File path to analyze (for imports, affected)',
+        },
+        include_tests: {
+          type: 'boolean',
+          description: 'Include test files in results (default: false)',
+        },
+      },
+      required: ['analysis_type'],
+    },
+  },
+];
+
+/**
+ * Dev tools for secondary repo — available on explicit user request in /synthesize sessions.
+ * Allows cloning, editing, committing, pushing, and creating PRs on the secondary repo.
+ */
+export const SECONDARY_DEV_TOOLS: ToolDefinition[] = [
+  {
+    name: 'secondary_clone',
+    description:
+      'Clone the secondary repository into a separate workspace so it can be edited. Must be called before using secondary_patch_file, secondary_git_*, or secondary_create_pr tools. Only needed once per session.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'secondary_patch_file',
+    description:
+      'Apply surgical SEARCH/REPLACE edits to a file in the SECONDARY repository workspace. The secondary repo must be cloned first with secondary_clone.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'File path relative to the secondary workspace root.',
+        },
+        edits: {
+          type: 'string',
+          description: 'JSON array of edit operations: [{"oldText": "...", "newText": "..."}].',
+        },
+      },
+      required: ['path', 'edits'],
+    },
+  },
+  {
+    name: 'secondary_git_status',
+    description: 'Show git status of the secondary repository workspace.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        flags: { type: 'string', description: 'Optional flags (e.g. "--short").' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'secondary_git_diff',
+    description: 'Show git diff in the secondary repository workspace.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'What to diff (e.g. "--staged", "HEAD~1").' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'secondary_git_add',
+    description: 'Stage files in the secondary repository workspace.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        files: { type: 'string', description: 'Files to stage (e.g. ".", "src/index.ts").' },
+      },
+      required: ['files'],
+    },
+  },
+  {
+    name: 'secondary_git_commit',
+    description: 'Commit staged changes in the secondary repository workspace.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'Commit message.' },
+      },
+      required: ['message'],
+    },
+  },
+  {
+    name: 'secondary_git_push',
+    description: 'Push commits in the secondary repository to its remote.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        args: { type: 'string', description: 'Push arguments (e.g. "origin main", "--set-upstream origin branch").' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'secondary_git_branch',
+    description: 'List, create, or delete branches in the secondary repository workspace.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        args: { type: 'string', description: 'Branch arguments (e.g. "new-feature", "-d old").' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'secondary_git_checkout',
+    description: 'Switch branches or restore files in the secondary repository workspace.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Branch name or restore target.' },
+      },
+      required: ['target'],
+    },
+  },
+  {
+    name: 'secondary_create_pr',
+    description:
+      'Create a pull request on the SECONDARY repository. Changes must be committed and pushed first.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'PR title.' },
+        body: { type: 'string', description: 'PR description in markdown.' },
+        base: { type: 'string', description: 'Base branch (defaults to repo default branch).' },
+        draft: { type: 'boolean', description: 'Create as draft PR (default: false).' },
+      },
+      required: [],
+    },
+  },
+];
+
+/**
  * Convert Anthropic-format tool definitions to OpenAI-compatible function format.
  * Used for Ollama and other OpenAI-compatible providers.
  */

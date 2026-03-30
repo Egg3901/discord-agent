@@ -5,8 +5,8 @@ import { nanoid } from 'nanoid';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { KeyPool } from '../keys/keyPool.js';
-import { buildSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
-import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, GIT_TOOLS, WEB_TOOLS, GITHUB_TOOLS, WORKSPACE_TOOLS, ADVANCED_TOOLS, toGeminiFunctionDeclarations, toOpenAITools } from '../tools/toolDefinitions.js';
+import { buildSystemPrompt, buildSynthesizeSystemPrompt, trimConversation, type RepoContext } from './contextBuilder.js';
+import { AGENT_TOOLS, SANDBOX_TOOLS, DEV_TOOLS, GIT_TOOLS, WEB_TOOLS, GITHUB_TOOLS, WORKSPACE_TOOLS, ADVANCED_TOOLS, SECONDARY_REPO_TOOLS, SECONDARY_DEV_TOOLS, toGeminiFunctionDeclarations, toOpenAITools } from '../tools/toolDefinitions.js';
 import { getSandboxDir } from '../tools/scriptExecutor.js';
 import { ensureGitWorkspace } from '../tools/devToolExecutor.js';
 import { saveClaudeCodeSession, loadClaudeCodeSessionMap } from '../storage/database.js';
@@ -96,6 +96,10 @@ export interface StreamOptions {
   customSystemPrompt?: string;
   /** Called with status messages during setup (e.g. "Pulling model...") */
   onStatus?: (status: string) => void;
+  /** Whether secondary repo tools are available (dual-repo /synthesize sessions) */
+  enableSecondaryRepo?: boolean;
+  /** Secondary repo context for /synthesize sessions */
+  secondaryRepoContext?: RepoContext;
 }
 
 /**
@@ -140,7 +144,38 @@ function getActiveTools(options: StreamOptions): import('../tools/toolDefinition
   if (options.enableWebSearch) {
     tools.push(...WEB_TOOLS);
   }
+  if (options.enableSecondaryRepo) {
+    tools.push(...SECONDARY_REPO_TOOLS);
+    if (config.ENABLE_DEV_TOOLS) {
+      tools.push(...SECONDARY_DEV_TOOLS);
+    }
+  }
   return tools;
+}
+
+/**
+ * Build system prompt, using the dual-repo synthesize version when secondary repo is present.
+ */
+function buildSystemPromptForOptions(options: StreamOptions): string {
+  if (options.enableSecondaryRepo && options.secondaryRepoContext && options.repoContext) {
+    return buildSynthesizeSystemPrompt(
+      options.repoContext,
+      options.secondaryRepoContext,
+      !!options.enableRepoTools,
+      config.ENABLE_SCRIPT_EXECUTION,
+      config.ENABLE_DEV_TOOLS,
+      !!options.enableWebSearch,
+      options.customSystemPrompt,
+    );
+  }
+  return buildSystemPrompt(
+    options.repoContext,
+    options.enableRepoTools,
+    config.ENABLE_SCRIPT_EXECUTION,
+    config.ENABLE_DEV_TOOLS,
+    options.enableWebSearch,
+    options.customSystemPrompt,
+  );
 }
 
 export class AIClient {
@@ -209,7 +244,7 @@ export class AIClient {
     model: string,
     options: StreamOptions,
   ): AsyncGenerator<AIStreamEvent> {
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch, options.customSystemPrompt);
+    const systemPrompt = buildSystemPromptForOptions(options);
     // Reserve token budget for the system prompt so conversation trimming is accurate
     const systemTokenEstimate = Math.ceil(systemPrompt.length / 4);
     const trimmed = trimConversation(messages, Math.max(config.MAX_CONTEXT_TOKENS - systemTokenEstimate, 4096));
@@ -695,7 +730,7 @@ export class AIClient {
     // Check abort signal before starting
     if (options.signal?.aborted) return;
 
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch, options.customSystemPrompt);
+    const systemPrompt = buildSystemPromptForOptions(options);
     const systemTokenEstimate = Math.ceil(systemPrompt.length / 4);
     const trimmed = trimConversation(messages, Math.max(config.MAX_CONTEXT_TOKENS - systemTokenEstimate, 4096));
 
@@ -804,7 +839,7 @@ export class AIClient {
   ): AsyncGenerator<AIStreamEvent> {
     if (options.signal?.aborted) return;
 
-    const systemPrompt = buildSystemPrompt(options.repoContext, options.enableRepoTools, config.ENABLE_SCRIPT_EXECUTION, config.ENABLE_DEV_TOOLS, options.enableWebSearch, options.customSystemPrompt);
+    const systemPrompt = buildSystemPromptForOptions(options);
     const systemTokenEstimate = Math.ceil(systemPrompt.length / 4);
     const trimmed = trimConversation(messages, Math.max(config.MAX_CONTEXT_TOKENS - systemTokenEstimate, 4096));
 
