@@ -57,7 +57,7 @@ export function createStatusCommand(sessionManager: SessionManager): CommandHand
             .setTitle('Session Status')
             .addFields(
               { name: 'Model', value: `\`${effectiveModel}\`\n${providerLabel(provider)}${session.modelOverride ? ' *(override)*' : ''}`, inline: true },
-              { name: 'Repo', value: session.repoOwner ? `${session.repoOwner}/${session.repoName}` : '*none*', inline: true },
+              { name: 'Repo', value: session.repoOwner ? `${session.repoOwner}/${session.repoName}${session.defaultBranch ? ` (\`${session.defaultBranch}\`)` : ''}` : '*none*', inline: true },
               { name: 'Thinking', value: thinkingEnabled ? `On (${thinkingBudget.toLocaleString()} tokens)` : 'Off', inline: true },
               { name: 'Messages', value: `${session.messages.length}`, inline: true },
               { name: 'Age', value: formatDuration(age), inline: true },

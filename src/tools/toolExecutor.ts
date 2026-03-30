@@ -39,6 +39,7 @@ export class ToolExecutor {
     private repo: string,
     private sessionId?: string,
     private repoUrl?: string,
+    private defaultBranch?: string,
   ) {}
 
   /**
@@ -285,7 +286,7 @@ export class ToolExecutor {
           return 'Error: Could not determine current branch. Make sure you are in a git repository with commits.';
         }
 
-        const base = (typeof input.base === 'string' && input.base) ? input.base : 'main';
+        const base = (typeof input.base === 'string' && input.base) ? input.base : (this.defaultBranch || 'main');
         const title = (typeof input.title === 'string' && input.title) ? input.title : head.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         const body = typeof input.body === 'string' ? input.body : '';
         const draft = input.draft === true;

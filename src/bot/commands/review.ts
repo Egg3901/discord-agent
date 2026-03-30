@@ -118,6 +118,9 @@ export function createReviewCommand(
         session.modelOverride = config.ANTHROPIC_MODEL;
         session.repoOwner = owner;
         session.repoName = repo;
+        repoFetcher.getDefaultBranch(owner, repo)
+          .then((branch) => { session.defaultBranch = branch; })
+          .catch(() => {});
 
         const reviewPrompt = `You are doing a code review for PR #${prNumber} in ${owner}/${repo}.
 

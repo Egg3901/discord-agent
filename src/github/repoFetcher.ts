@@ -13,6 +13,8 @@ const MAX_TOTAL_FILES = 20;
 export class RepoFetcher {
   private _octokit: Octokit | null = null;
   private _octokitToken: string | null = null;
+  /** Cache of default branch per owner/repo. */
+  private defaultBranchCache: Map<string, string> = new Map();
 
   /**
    * Returns a cached Octokit instance using the current GITHUB_TOKEN from config.
@@ -42,6 +44,26 @@ export class RepoFetcher {
       throw new Error(`Invalid GitHub URL: ${url}`);
     }
     return { owner: match[1], repo: match[2] };
+  }
+
+  /**
+   * Get the default branch for a repository (cached per owner/repo).
+   * Falls back to 'main' if the API call fails.
+   */
+  async getDefaultBranch(owner: string, repo: string): Promise<string> {
+    const key = `${owner}/${repo}`;
+    const cached = this.defaultBranchCache.get(key);
+    if (cached) return cached;
+
+    try {
+      const { data } = await this.octokit.repos.get({ owner, repo });
+      const branch = data.default_branch;
+      this.defaultBranchCache.set(key, branch);
+      return branch;
+    } catch (err) {
+      logger.debug({ err, owner, repo }, 'Failed to fetch default branch, falling back to main');
+      return 'main';
+    }
   }
 
   /**

@@ -235,6 +235,10 @@ export function createCodeCommand(
         if (repoOwner && repoName) {
           session.repoOwner = repoOwner;
           session.repoName = repoName;
+          // Fetch default branch in background (non-blocking)
+          repoFetcher.getDefaultBranch(repoOwner, repoName)
+            .then((branch) => { session.defaultBranch = branch; })
+            .catch(() => {});
         }
 
         sessionManager.addMessage(sessionChannel.id, {
@@ -341,6 +345,7 @@ export function createCodeCommand(
               repoName || '',
               session.id,
               repoUrl || undefined,
+              session.defaultBranch,
             );
             let lastToolMsg: import('discord.js').Message | null = null;
             let agentToolCount = 0;

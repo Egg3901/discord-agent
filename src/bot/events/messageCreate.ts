@@ -249,6 +249,7 @@ export function handleMessageCreate(
             session.repoName || '',
             session.id,
             session.repoContext?.repoUrl,
+            session.defaultBranch,
           );
           let lastToolMsg: import('discord.js').Message | null = null;
           let agentToolCount = 0;

@@ -468,7 +468,7 @@ export const GITHUB_TOOLS: ToolDefinition[] = [
         },
         base: {
           type: 'string',
-          description: 'Base branch to merge into (default: "main"). Use "master" or other branch names if needed.',
+          description: 'Base branch to merge into. Defaults to the repository\'s default branch (auto-detected). Override with "main", "master", "develop", etc.',
         },
         draft: {
           type: 'boolean',

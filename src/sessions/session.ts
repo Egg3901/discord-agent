@@ -11,6 +11,7 @@ export interface Session {
   modelOverride?: string;
   repoOwner?: string;
   repoName?: string;
+  defaultBranch?: string;
   createdAt: number;
   lastActiveAt: number;
 

@@ -83,6 +83,9 @@ export function createRepoCommand(
         // Store repo owner/name for tool executor
         session.repoOwner = owner;
         session.repoName = repo;
+        repoFetcher.getDefaultBranch(owner, repo)
+          .then((branch) => { session.defaultBranch = branch; })
+          .catch(() => {});
 
         if (paths && paths.length > 0) {
           // If specific paths requested, fetch those files

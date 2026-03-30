@@ -104,7 +104,7 @@ Rules for sandbox tools:
 - \`patch_file(path, edits)\`: Apply surgical SEARCH/REPLACE edits to files in the git workspace (cloned repo). Same JSON format as \`edit_file\`: \`[{"oldText": "...", "newText": "..."}]\`. Changes show in \`git_status\` / \`git_diff\` and can be committed. Use this for modifying existing repo files — more precise than \`run_terminal\` with sed.
 
 **GitHub tools** (PR & issue workflows — available when GITHUB_TOKEN is configured):
-- \`create_pr(title?, body?, base?, draft?)\`: Create a pull request from the current branch. Auto-detects branch name. \`base\` defaults to \`"main"\`. Use after committing and pushing changes to complete the workflow.
+- \`create_pr(title?, body?, base?, draft?)\`: Create a pull request from the current branch. Auto-detects branch name. \`base\` defaults to the repo's default branch (auto-detected). Use after committing and pushing changes to complete the workflow.
 - \`read_github_issue(issue)\`: Read a GitHub issue's title, description, labels, assignees, and comments. Pass a number (\`"42"\`), URL, or \`owner/repo#42\`. Use this before coding to understand requirements.
 - \`create_github_issue(title, body?, labels?)\`: Create a new GitHub issue. Use for tracking bugs, TODOs, or follow-up work found during review. \`labels\` is comma-separated (e.g. \`"bug,high-priority"\`).
 
