@@ -2,10 +2,12 @@ import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.j
 import type { AIClient } from '../../claude/aiClient.js';
 import { isAllowed } from '../middleware/permissions.js';
 import { logger } from '../../utils/logger.js';
+import { formatApiError } from '../../utils/errors.js';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { rateLimitEmbed } from '../../utils/embedHelpers.js';
+import { config } from '../../config.js';
 
 // System prompt for improving user prompts
 const IMPROVE_PROMPT_SYSTEM = `You are an expert at optimizing prompts for AI assistants. Your task is to take a user's prompt and make it clearer, more specific, and more effective at getting the desired result.
@@ -31,10 +33,18 @@ export async function generateImprovedPrompt(aiClient: AIClient, prompt: string)
       content: `${IMPROVE_PROMPT_SYSTEM}\n\nHere is the prompt to improve:\n${prompt}`,
     },
   ];
-  return aiClient.getResponse(messages, {
-    modelOverride: 'claude-sonnet-4-6',
-    enableTools: false,
-  });
+  try {
+    return await aiClient.getResponse(messages, {
+      modelOverride: 'claude-sonnet-4-6',
+      enableTools: false,
+    });
+  } catch (err) {
+    // Fall back to the default configured model if sonnet is unavailable
+    logger.warn({ err }, 'Prompt improvement failed with claude-sonnet-4-6, falling back to default model');
+    return aiClient.getResponse(messages, {
+      enableTools: false,
+    });
+  }
 }
 
 export function createImproveCommand(aiClient: AIClient, rateLimiter: RateLimiter): CommandHandler {
@@ -70,20 +80,9 @@ export function createImproveCommand(aiClient: AIClient, rateLimiter: RateLimite
         await interaction.deferReply();
         
         const originalPrompt = interaction.options.getString('prompt', true);
-        
-        // Create messages array with our improvement system prompt
-        const messages = [
-          { role: 'user' as const, content: `${IMPROVE_PROMPT_SYSTEM}\n\nHere is the prompt to improve:\n${originalPrompt}` },
-        ];
 
-        // Get the improved prompt from the AI
-        const improvedPrompt = await aiClient.getResponse(
-          messages,
-          { 
-            modelOverride: 'claude-sonnet-4-6', // Use a reliable model for prompt improvement
-            enableTools: false 
-          }
-        );
+        // Use the shared function which handles model fallback
+        const improvedPrompt = await generateImprovedPrompt(aiClient, originalPrompt);
 
         // Respond with the improved prompt as plain text
         await interaction.editReply({
@@ -91,8 +90,9 @@ export function createImproveCommand(aiClient: AIClient, rateLimiter: RateLimite
         });
       } catch (err) {
         logger.error({ err }, 'Error in /improve command');
+        const detail = formatApiError(err);
         await interaction.editReply({
-          content: 'Sorry, I encountered an error while improving your prompt. Please try again.',
+          content: `Failed to improve prompt: ${detail}`,
         });
       }
     },

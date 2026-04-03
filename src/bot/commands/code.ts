@@ -107,8 +107,13 @@ export function createCodeCommand(
         }
 
         // --- Prompt improvement flow ---
-        const improved = await generateImprovedPrompt(aiClient, originalPrompt);
-        const meaningfullyDifferent = improved.trim() !== originalPrompt.trim() && improved.length > 0;
+        let improved: string | null = null;
+        try {
+          improved = await generateImprovedPrompt(aiClient, originalPrompt);
+        } catch (err) {
+          logger.warn({ err }, 'Prompt improvement failed, using original prompt');
+        }
+        const meaningfullyDifferent = improved && improved.trim() !== originalPrompt.trim() && improved.length > 0;
 
         if (meaningfullyDifferent) {
           const { EmbedBuilder } = await import('discord.js');
@@ -117,7 +122,7 @@ export function createCodeCommand(
             .setTitle('Prompt Improvement Suggested')
             .addFields(
               { name: 'Original', value: originalPrompt.slice(0, 1024) },
-              { name: 'Improved', value: improved.slice(0, 1024) },
+              { name: 'Improved', value: improved!.slice(0, 1024) },
             )
             .setFooter({ text: 'Choose within 30s — defaults to original if no selection' });
 
@@ -142,7 +147,7 @@ export function createCodeCommand(
               time: 30_000,
               componentType: ComponentType.Button,
             });
-            prompt = btn.customId === 'use_improved' ? improved : originalPrompt;
+            prompt = btn.customId === 'use_improved' ? improved! : originalPrompt;
             await btn.deferUpdate();
           } catch {
             // Timed out — use original
