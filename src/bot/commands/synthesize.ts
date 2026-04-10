@@ -12,7 +12,7 @@ import { AIClient, getProviderForModel } from '../../claude/aiClient.js';
 import { ResponseStreamer } from '../../claude/responseFormatter.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { formatApiError } from '../../utils/errors.js';
-import { isAllowed } from '../middleware/permissions.js';
+import { isAdmin } from '../middleware/permissions.js';
 import { logger } from '../../utils/logger.js';
 import { RepoFetcher } from '../../github/repoFetcher.js';
 import { ToolExecutor } from '../../tools/toolExecutor.js';
@@ -73,9 +73,9 @@ export function createSynthesizeCommand(
 
     async execute(interaction: ChatInputCommandInteraction) {
       // --- Permission & rate limit checks ---
-      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
+      if (!isAdmin(interaction.member as GuildMember | null)) {
         await interaction.reply({
-          content: 'You do not have a role that allows using this bot.',
+          content: 'This command requires administrator permissions.',
           ephemeral: true,
         });
         return;

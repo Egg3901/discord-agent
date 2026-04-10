@@ -5,7 +5,7 @@ import {
 } from 'discord.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { sandboxListFiles, getSandboxDir } from '../../tools/scriptExecutor.js';
-import { isAllowed } from '../middleware/permissions.js';
+import { isAdmin } from '../middleware/permissions.js';
 import { formatApiError } from '../../utils/errors.js';
 import type { CommandHandler } from './types.js';
 
@@ -22,9 +22,9 @@ export function createSandboxCommand(sessionManager: SessionManager): CommandHan
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
+      if (!isAdmin(interaction.member as GuildMember | null)) {
         await interaction.reply({
-          content: 'You do not have a role that allows using this bot.',
+          content: 'This command requires administrator permissions.',
           ephemeral: true,
         });
         return;

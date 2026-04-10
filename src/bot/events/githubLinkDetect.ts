@@ -9,7 +9,7 @@ import {
   ComponentType,
 } from 'discord.js';
 import { logger } from '../../utils/logger.js';
-import { isAllowed } from '../middleware/permissions.js';
+import { isAdmin } from '../middleware/permissions.js';
 import { BotColors } from '../../utils/embedHelpers.js';
 
 // Matches GitHub PR URLs: https://github.com/owner/repo/pull/123
@@ -37,7 +37,7 @@ export function handleGithubLinkDetect(client: Client): void {
     if (!message.content.includes('github.com/')) return;
 
     // Access check
-    if (!isAllowed(message.member, message.author.id)) return;
+    if (!isAdmin(message.member)) return;
 
     try {
       // Check for PR links first (more specific)

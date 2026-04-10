@@ -6,7 +6,9 @@ import {
   ButtonStyle,
   ComponentType,
   type ChatInputCommandInteraction,
+  type GuildMember,
 } from 'discord.js';
+import { isAdmin } from '../middleware/permissions.js';
 import { BotColors } from '../../utils/embedHelpers.js';
 import type { CommandHandler } from './types.js';
 
@@ -129,6 +131,11 @@ export function createHelpCommand(): CommandHandler {
       .setDescription('Show all available commands and how to use the bot'),
 
     async execute(interaction: ChatInputCommandInteraction) {
+      if (!isAdmin(interaction.member as GuildMember | null)) {
+        await interaction.reply({ content: 'This command requires administrator permissions.', ephemeral: true });
+        return;
+      }
+
       let currentPage = 0;
 
       function buildRow() {
