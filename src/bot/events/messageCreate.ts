@@ -12,7 +12,7 @@ import { SessionManager } from '../../sessions/sessionManager.js';
 import { AIClient, getProviderForModel } from '../../claude/aiClient.js';
 import { ResponseStreamer } from '../../claude/responseFormatter.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
-import { isAllowed } from '../middleware/permissions.js';
+import { isAdmin } from '../middleware/permissions.js';
 import { RepoFetcher } from '../../github/repoFetcher.js';
 import { ToolExecutor } from '../../tools/toolExecutor.js';
 import { runAgentLoop } from '../../claude/agentLoop.js';
@@ -41,8 +41,8 @@ export function handleMessageCreate(
       return;
     }
 
-    // Access check — pass userId for DM allowlist lookup when member is null
-    if (!isAllowed(message.member, message.author.id)) {
+    // Access check — require admin permissions
+    if (!isAdmin(message.member)) {
       if (isDm) {
         logger.debug({ userId: message.author.id }, 'DM message denied: user not on allowlist');
       }

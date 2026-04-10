@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import type { AIClient } from '../../claude/aiClient.js';
-import { isAllowed } from '../middleware/permissions.js';
+import { isAdmin } from '../middleware/permissions.js';
 import { logger } from '../../utils/logger.js';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
@@ -57,9 +57,9 @@ export function createSuggestCommand(
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
+      if (!isAdmin(interaction.member as GuildMember | null)) {
         await interaction.reply({
-          content: 'You do not have a role that allows using this bot.',
+          content: 'This command requires administrator permissions.',
           ephemeral: true,
         });
         return;

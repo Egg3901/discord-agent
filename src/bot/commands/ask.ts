@@ -5,7 +5,7 @@ import { ResponseStreamer } from '../../claude/responseFormatter.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { formatApiError } from '../../utils/errors.js';
-import { isAllowed } from '../middleware/permissions.js';
+import { isAdmin } from '../middleware/permissions.js';
 import { logUsage } from '../../storage/database.js';
 import { rateLimitEmbed } from '../../utils/embedHelpers.js';
 import { logger } from '../../utils/logger.js';
@@ -37,9 +37,9 @@ export function createAskCommand(
       ),
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
+      if (!isAdmin(interaction.member as GuildMember | null)) {
         await interaction.reply({
-          content: 'You do not have a role that allows using this bot.',
+          content: 'This command requires administrator permissions.',
           ephemeral: true,
         });
         return;

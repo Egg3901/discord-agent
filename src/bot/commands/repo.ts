@@ -6,7 +6,7 @@ import {
 } from 'discord.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { RepoFetcher } from '../../github/repoFetcher.js';
-import { isAllowed } from '../middleware/permissions.js';
+import { isAdmin } from '../middleware/permissions.js';
 import { formatApiError } from '../../utils/errors.js';
 import { logger } from '../../utils/logger.js';
 import type { CommandHandler } from './types.js';
@@ -50,9 +50,9 @@ export function createRepoCommand(
     },
 
     async execute(interaction: ChatInputCommandInteraction) {
-      if (!isAllowed(interaction.member as GuildMember | null, interaction.user.id)) {
+      if (!isAdmin(interaction.member as GuildMember | null)) {
         await interaction.reply({
-          content: 'You do not have a role that allows using this bot.',
+          content: 'This command requires administrator permissions.',
           ephemeral: true,
         });
         return;
