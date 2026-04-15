@@ -42,6 +42,8 @@ export async function runAgentLoop(
   // Work on a copy so we don't mutate the caller's array during the loop
   const workingMessages = [...messages];
   let previousToolKey = '';
+  let repeatedToolCount = 0;
+  let nudgedForEmptyAnswer = false;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // Collect events from the stream
@@ -98,19 +100,45 @@ export async function runAgentLoop(
       newMessages.push(assistantMsg);
     }
 
-    // If no tool calls, we're done (text-only response)
+    // If no tool calls, the API signaled end_turn. Normally we're done — but if the
+    // last tool result was an error AND the model produced little/no text, it likely
+    // gave up mid-investigation. Nudge it once to continue before terminating.
     if (toolUses.length === 0) {
+      const lastMsg = workingMessages[workingMessages.length - 2]; // tool_result message
+      const lastWasToolError = isToolErrorBatch(lastMsg);
+      const answerLooksEmpty = iterationText.trim().length < 120;
+      if (lastWasToolError && answerLooksEmpty && !nudgedForEmptyAnswer) {
+        nudgedForEmptyAnswer = true;
+        const nudge: ConversationMessage = {
+          role: 'user',
+          content:
+            '[System: Your last tool call(s) failed or returned no results, and you stopped without answering. ' +
+            'Do not conclude yet. Try a different approach: a different search term, a different tool ' +
+            '(search_files + read_file, analyze_code, or list_directory), or a broader query. ' +
+            'Only produce a final answer once you have actually investigated the question.]',
+        };
+        workingMessages.push(nudge);
+        newMessages.push(nudge);
+        logger.debug({ iteration }, 'Agent loop: nudging after empty/error-only answer');
+        continue;
+      }
       break;
     }
 
-    // Stuck-loop detection: if exact same tool calls as previous iteration, bail.
+    // Stuck-loop detection: only bail if we see the exact same tool batch THREE iterations
+    // in a row (a single retry is a legitimate recovery attempt, not a stuck loop).
     const currentToolKey = toolUses.map((t) => {
       const sortedInput = Object.keys(t.input).sort().map((k) => `${k}=${JSON.stringify(t.input[k])}`).join(',');
       return `${t.name}:{${sortedInput}}`;
     }).join('|');
     if (currentToolKey === previousToolKey) {
-      logger.warn({ iteration, toolCalls: toolUses.map((t) => t.name) }, 'Agent loop: repeated tool calls detected, stopping');
-      break;
+      repeatedToolCount += 1;
+      if (repeatedToolCount >= 2) {
+        logger.warn({ iteration, toolCalls: toolUses.map((t) => t.name), repeatedToolCount }, 'Agent loop: repeated tool calls detected, stopping');
+        break;
+      }
+    } else {
+      repeatedToolCount = 0;
     }
     previousToolKey = currentToolKey;
 
@@ -202,6 +230,27 @@ export async function runAgentLoop(
     toolCallCount,
     iterations: newMessages.filter((m) => m.role === 'assistant').length,
   };
+}
+
+/**
+ * Heuristic: did the previous tool_result batch consist entirely of errors or empty
+ * "no results" replies? Used to decide whether to nudge the model to keep working.
+ */
+function isToolErrorBatch(msg: ConversationMessage | undefined): boolean {
+  if (!msg || msg.role !== 'user' || !Array.isArray(msg.content)) return false;
+  const results = msg.content.filter((b): b is Extract<ContentBlock, { type: 'tool_result' }> => b.type === 'tool_result');
+  if (results.length === 0) return false;
+  return results.every((r) => {
+    const lower = (r.content || '').toLowerCase();
+    return (
+      lower.startsWith('error:') ||
+      lower.includes('no results found') ||
+      lower.includes('no matches for') ||
+      lower.includes('no files matched') ||
+      lower.includes('file not found') ||
+      lower.includes('directory is empty or not found')
+    );
+  });
 }
 
 function parseRequestInputPayload(input: Record<string, unknown>): RequestInputPayload {

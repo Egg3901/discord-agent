@@ -48,13 +48,17 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   {
     name: 'search_code',
     description:
-      'Search for a text pattern across all files in the GitHub repository. Returns matching file paths and line snippets (up to 10 results).',
+      'Search repo files for a text pattern. When dev tools are enabled, runs a real ripgrep over the cloned workspace (substring-literal by default; set regex:true for regex). When dev tools are disabled, falls back to GitHub\'s code search API, which is TOKEN-INDEXED — it cannot match punctuation (e.g. "foo("), substrings within identifiers, or symbols. On the API fallback, prefer bare tokens. If a search returns no results, retry with a different token or switch to search_files + read_file or analyze_code before concluding the code is absent.',
     input_schema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Search query string (plain text, not regex)',
+          description: 'Search string. Literal by default. For the cloned-workspace path, set regex:true to interpret as a regular expression.',
+        },
+        regex: {
+          type: 'boolean',
+          description: 'Treat query as a regex (only used when dev tools are enabled; ignored on the GitHub API fallback). Default false.',
         },
       },
       required: ['query'],
@@ -711,13 +715,17 @@ export const SECONDARY_REPO_TOOLS: ToolDefinition[] = [
   {
     name: 'secondary_search_code',
     description:
-      'Search for a text pattern across all files in the SECONDARY repository. Returns matching file paths and line snippets (up to 10 results).',
+      'Search the SECONDARY repository for a text pattern. Uses a real ripgrep over the cloned workspace when dev tools are enabled, otherwise falls back to GitHub\'s token-indexed code search API (same caveats as primary search_code — can\'t match punctuation/substrings on that fallback).',
     input_schema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Search query string (plain text, not regex)',
+          description: 'Search string. Literal by default. Set regex:true for regex (only on dev-tools path).',
+        },
+        regex: {
+          type: 'boolean',
+          description: 'Treat query as a regex (only used when dev tools are enabled). Default false.',
         },
       },
       required: ['query'],

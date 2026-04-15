@@ -892,6 +892,96 @@ export async function ensureGitWorkspace(
 }
 
 /**
+ * Run ripgrep (preferred) or grep over a cloned workspace. Substring-literal by default.
+ * Returns a formatted result with up to `maxResults` hits across up to `maxFiles` files.
+ * This is the real grep that `search_code` should prefer over GitHub's token-indexed API.
+ */
+export async function grepWorkspace(
+  sandboxDir: string,
+  query: string,
+  opts: { isRegex?: boolean; maxResults?: number; maxFiles?: number } = {},
+): Promise<{ ok: boolean; output: string }> {
+  const maxResults = opts.maxResults ?? 30;
+  const maxFiles = opts.maxFiles ?? 15;
+
+  // Prefer ripgrep when available — faster, gitignore-aware, clean output
+  const rgArgs = [
+    '--no-heading',
+    '--line-number',
+    '--color', 'never',
+    '--max-count', '5',          // per file
+    '--max-columns', '240',
+    '-I',                         // skip binaries
+    ...(opts.isRegex ? [] : ['--fixed-strings']),
+    '--', query,
+  ];
+
+  const run = (cmd: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number | null }> => {
+    return new Promise((resolve) => {
+      const proc = spawn(cmd, args, {
+        cwd: sandboxDir,
+        timeout: 15_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+      proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+      proc.on('close', (code) => resolve({ stdout, stderr, code }));
+      proc.on('error', (err) => resolve({ stdout, stderr: err.message, code: 1 }));
+    });
+  };
+
+  let result = await run('rg', rgArgs);
+  // rg exits 1 when no match, 2 on error. 127 means rg not installed.
+  if (result.code === 127 || /command not found|ENOENT/i.test(result.stderr)) {
+    const grepArgs = [
+      '-rnI',
+      '--max-count=5',
+      '--exclude-dir=.git',
+      '--exclude-dir=node_modules',
+      opts.isRegex ? '-E' : '-F',
+      '--', query, '.',
+    ];
+    result = await run('grep', grepArgs);
+  }
+
+  if (result.code === 1 || (result.code === 0 && !result.stdout.trim())) {
+    return { ok: true, output: `No matches for \`${query}\` in the cloned workspace.` };
+  }
+  if (result.code !== 0 && result.code !== 1) {
+    return { ok: false, output: `Search failed: ${result.stderr.slice(0, 300) || 'exit ' + result.code}` };
+  }
+
+  // Parse "path:line:content" and group by file
+  const lines = result.stdout.split('\n').filter(Boolean);
+  const byFile = new Map<string, string[]>();
+  for (const line of lines) {
+    const m = line.match(/^([^:]+):(\d+):(.*)$/);
+    if (!m) continue;
+    const [, path, ln, snippet] = m;
+    if (!byFile.has(path)) byFile.set(path, []);
+    byFile.get(path)!.push(`  L${ln}: ${snippet.trim().slice(0, 200)}`);
+  }
+
+  const files = Array.from(byFile.entries()).slice(0, maxFiles);
+  let hitCount = 0;
+  const chunks: string[] = [];
+  for (const [path, hits] of files) {
+    const shown = hits.slice(0, Math.max(1, maxResults - hitCount));
+    hitCount += shown.length;
+    chunks.push(`${path}\n${shown.join('\n')}`);
+    if (hitCount >= maxResults) break;
+  }
+
+  const extraFiles = byFile.size > files.length ? `\n\n[${byFile.size - files.length} more file(s) with matches not shown]` : '';
+  return {
+    ok: true,
+    output: `Found ${hitCount} match(es) in ${Math.min(byFile.size, files.length)} file(s) for \`${query}\`:\n\n${chunks.join('\n\n')}${extraFiles}`,
+  };
+}
+
+/**
  * Resolve git identity from GITHUB_TOKEN.
  * Calls GET /user once and caches for the process lifetime.
  */

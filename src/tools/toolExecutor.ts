@@ -1,6 +1,6 @@
 import { RepoFetcher } from '../github/repoFetcher.js';
 import { executeScript, sandboxWriteFile, sandboxReadFile, sandboxListFiles, getSandboxDir } from './scriptExecutor.js';
-import { DevToolExecutor, GIT_TOOL_NAMES, WORKSPACE_TOOL_NAMES, ADVANCED_TOOL_NAMES, ensureGitWorkspace } from './devToolExecutor.js';
+import { DevToolExecutor, GIT_TOOL_NAMES, WORKSPACE_TOOL_NAMES, ADVANCED_TOOL_NAMES, ensureGitWorkspace, grepWorkspace } from './devToolExecutor.js';
 import { webSearch, webFetch } from './webSearchExecutor.js';
 import { editFile } from './fileEditor.js';
 import { findDefinitions, findReferences, analyzeImports, findCallers, affectedFiles } from './codeAnalyzer.js';
@@ -234,7 +234,8 @@ export class ToolExecutor {
           if (typeof query !== 'string' || query.length === 0 || query.length > MAX_QUERY_LENGTH) {
             return 'Error: query must be a non-empty string (max 200 chars)';
           }
-          result = await this.searchCode(query);
+          const isRegex = input.regex === true || input.is_regex === true;
+          result = await this.searchCode(query, isRegex);
           break;
         }
         case 'search_files': {
@@ -501,10 +502,33 @@ export class ToolExecutor {
     return entries.join('\n');
   }
 
-  private async searchCode(query: string): Promise<string> {
+  private async searchCode(query: string, isRegex = false): Promise<string> {
+    // Prefer local grep over the cloned workspace when dev tools are enabled —
+    // GitHub's code-search API is token-indexed and can't match punctuation,
+    // substrings, or symbols like `formatCurrency(`. A real grep can.
+    if (config.ENABLE_DEV_TOOLS && this.repoUrl) {
+      try {
+        const sandbox = await this.getSandbox();
+        const grep = await grepWorkspace(sandbox, query, { isRegex });
+        if (grep.ok) return grep.output;
+        logger.warn({ query, err: grep.output }, 'Local grep failed, falling back to GitHub search API');
+      } catch (err) {
+        logger.warn({ err, query }, 'Workspace grep threw, falling back to GitHub search API');
+      }
+    }
+
+    // Fallback: GitHub code search API. Regex not supported here.
     const results = await this.repoFetcher!.searchCode(this.owner, this.repo, query);
     if (results.length === 0) {
-      return `No results found for: ${query}`;
+      return (
+        `No results found for \`${query}\` via GitHub code search.\n\n` +
+        `Note: GitHub's code search is token-indexed — it cannot match punctuation (e.g. \`foo(\`), ` +
+        `substrings within identifiers, or symbols. Try:\n` +
+        `- A different token (e.g. the function name alone without \`(\`)\n` +
+        `- \`search_files\` to find files by name, then \`read_file\` to inspect\n` +
+        `- \`analyze_code\` for symbol definitions/references` +
+        (config.ENABLE_DEV_TOOLS ? '' : `\n- Ask an admin to enable dev tools for a real grep-backed search`)
+      );
     }
     return results
       .map((r: { path: string; snippet: string }, i: number) => `[${i + 1}] ${r.path}\n${r.snippet}`)
@@ -571,8 +595,26 @@ export class ToolExecutor {
         if (typeof query !== 'string' || query.length === 0 || query.length > MAX_QUERY_LENGTH) {
           return 'Error: query must be a non-empty string (max 200 chars)';
         }
+        const isRegex = input.regex === true || input.is_regex === true;
+
+        if (config.ENABLE_DEV_TOOLS && this.secondaryRepoUrl) {
+          try {
+            const sandbox = await this.getSecondarySandbox();
+            const grep = await grepWorkspace(sandbox, query, { isRegex });
+            if (grep.ok) return grep.output;
+          } catch (err) {
+            logger.warn({ err, query }, 'Secondary workspace grep failed, falling back to GitHub search API');
+          }
+        }
+
         const results = await this.repoFetcher!.searchCode(o, r, query);
-        if (results.length === 0) return `No results found in secondary repo for: ${query}`;
+        if (results.length === 0) {
+          return (
+            `No results found in secondary repo for \`${query}\` via GitHub code search.\n\n` +
+            `Note: GitHub's code search is token-indexed and cannot match punctuation or substrings. ` +
+            `Try a different token, or use secondary_search_files + secondary_read_file.`
+          );
+        }
         return results.map((res: { path: string; snippet: string }, i: number) =>
           `[${i + 1}] ${res.path}\n${res.snippet}`).join('\n\n---\n\n');
       }
