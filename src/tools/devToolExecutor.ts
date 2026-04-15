@@ -426,11 +426,13 @@ export class DevToolExecutor {
       }
     }
 
-    // If we couldn't parse anything, return the raw output
+    // If we couldn't parse anything, surface the raw output with an explicit
+    // annotation so the model doesn't pretend it has structured pass/fail counts.
     if (total === 0) {
-      return raw;
+      return `[parsed: no — ${parser} output did not match known patterns; showing raw output. Treat any pass/fail claims from this with skepticism.]\n\n${raw}`;
     }
 
+    summary.unshift(`[parsed: yes — ${parser}]`);
     return summary.join('\n');
   }
 
@@ -489,9 +491,8 @@ export class DevToolExecutor {
         break;
       }
       case 'git_push': {
-        const args = typeof input.args === 'string' ? input.args.trim() : '';
-        gitArgs = `push${args ? ' ' + args : ''}`;
-        break;
+        // Smart push: auto-add --set-upstream for new branches, parse auth errors.
+        return this.smartGitPush(typeof input.args === 'string' ? input.args.trim() : '');
       }
       case 'git_pull': {
         const args = typeof input.args === 'string' ? input.args.trim() : '';
@@ -525,6 +526,38 @@ export class DevToolExecutor {
     }
 
     return this.execGitCommand(gitArgs);
+  }
+
+  /**
+   * git_push wrapper that (a) auto-sets upstream on first push of a new branch,
+   * and (b) translates common remote-side errors into actionable messages for
+   * the model so it doesn't waste iterations retrying blindly.
+   */
+  private async smartGitPush(userArgs: string): Promise<string> {
+    // If the user supplied explicit args (remote/branch/flags), respect them verbatim.
+    // We only auto-upstream when no args were given.
+    let finalArgs = userArgs;
+    let autoUpstreamBranch: string | null = null;
+    if (!userArgs) {
+      // Detect current branch
+      const branchOut = await this.execGitCommand('rev-parse --abbrev-ref HEAD');
+      const currentBranch = extractGitValue(branchOut);
+      if (!currentBranch || currentBranch === 'HEAD') {
+        return `Error: Could not determine current branch (detached HEAD?). Use git_checkout to switch to a branch first.\n${branchOut}`;
+      }
+
+      // Check if the branch has an upstream
+      const upstreamOut = await this.execGitCommand('rev-parse --abbrev-ref --symbolic-full-name @{u}');
+      const hasUpstream = !/fatal:|error:|no upstream/i.test(upstreamOut) && !!extractGitValue(upstreamOut);
+
+      if (!hasUpstream) {
+        finalArgs = `--set-upstream origin ${currentBranch}`;
+        autoUpstreamBranch = currentBranch;
+      }
+    }
+
+    const raw = await this.execGitCommand(`push${finalArgs ? ' ' + finalArgs : ''}`);
+    return annotatePushResult(raw, autoUpstreamBranch);
   }
 
   /**
@@ -979,6 +1012,75 @@ export async function grepWorkspace(
     ok: true,
     output: `Found ${hitCount} match(es) in ${Math.min(byFile.size, files.length)} file(s) for \`${query}\`:\n\n${chunks.join('\n\n')}${extraFiles}`,
   };
+}
+
+/**
+ * Extract the single-line value from an `execGitCommand` output string.
+ * The wrapper may add prefixes like `stdout:` / exit-code lines; pull the first
+ * non-empty line that isn't an obvious label or error.
+ */
+function extractGitValue(output: string): string | null {
+  if (!output) return null;
+  for (const line of output.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    if (/^(stdout|stderr|exit code|error|fatal|\[|---)/i.test(t)) continue;
+    return t;
+  }
+  return null;
+}
+
+/**
+ * Annotate `git push` output with a human-friendly diagnosis when GitHub returns
+ * a recognizable error. Prevents the model from retrying the same failing push.
+ */
+function annotatePushResult(raw: string, autoUpstreamBranch: string | null): string {
+  const lower = raw.toLowerCase();
+  const prefix = autoUpstreamBranch
+    ? `[auto: added --set-upstream origin ${autoUpstreamBranch} because branch had no upstream]\n\n`
+    : '';
+
+  // Auth / token issues
+  if (
+    lower.includes('could not read username') ||
+    lower.includes('authentication failed') ||
+    lower.includes('invalid username or token') ||
+    lower.includes('403 forbidden') ||
+    lower.includes('permission to') && lower.includes('denied')
+  ) {
+    return (
+      prefix +
+      `Push failed: authentication/permission error.\n\n` +
+      `Likely causes: (1) GITHUB_TOKEN is missing or lacks write access to this repo; ` +
+      `(2) the token is scoped to the wrong org/user; (3) branch protection requires a review. ` +
+      `Do NOT retry this push until the root cause is addressed. Ask the user (or an admin) to refresh the token.\n\n` +
+      `--- raw output ---\n${raw}`
+    );
+  }
+
+  // Non-fast-forward / diverged
+  if (lower.includes('non-fast-forward') || lower.includes('updates were rejected') || lower.includes('failed to push some refs')) {
+    return (
+      prefix +
+      `Push rejected: remote has commits your local branch doesn't have. ` +
+      `Run git_pull (or git_pull "--rebase") first to integrate remote changes, then push again. ` +
+      `Do NOT force-push unless the user explicitly authorizes it.\n\n` +
+      `--- raw output ---\n${raw}`
+    );
+  }
+
+  // Branch protection
+  if (lower.includes('protected branch') || lower.includes('gh006') || lower.includes('required status check')) {
+    return (
+      prefix +
+      `Push rejected: the target branch is protected and requires a PR with reviews/status checks. ` +
+      `Push to a feature branch and open a PR with create_pr.\n\n` +
+      `--- raw output ---\n${raw}`
+    );
+  }
+
+  // Success path — keep raw output but prepend the auto-upstream note
+  return prefix + raw;
 }
 
 /**

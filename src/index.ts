@@ -30,6 +30,7 @@ import { createRetryCommand } from './bot/commands/retry.js';
 import { createPersonaCommand } from './bot/commands/persona.js';
 import { createAllowDmsCommand } from './bot/commands/allowdms.js';
 import { createBaseBranchCommand } from './bot/commands/basebranch.js';
+import { createToolStatsCommand } from './bot/commands/toolstats.js';
 import { createSynthesizeCommand } from './bot/commands/synthesize.js';
 import { KeyPool } from './keys/keyPool.js';
 import { AIClient } from './claude/aiClient.js';
@@ -78,6 +79,7 @@ async function main() {
     createPersonaCommand(sessionManager),
     createAllowDmsCommand(),
     createBaseBranchCommand(sessionManager),
+    createToolStatsCommand(),
     createSynthesizeCommand(sessionManager, aiClient, rateLimiter, repoFetcher),
   ];
 

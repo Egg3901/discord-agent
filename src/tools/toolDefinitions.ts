@@ -97,7 +97,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   {
     name: 'analyze_code',
     description:
-      'Analyze code structure: find symbol definitions, locate all references, trace imports/exports, find callers of a function, or identify files affected by changes. More precise than text search for understanding code relationships.',
+      'Heuristic symbol/import search powered by regex patterns (not a full AST parser). Useful as a first pass for "where is this defined?" / "what calls this?" / "what does this file import?" questions. BUT: it matches identifiers inside comments and strings too, and it can miss symbols defined with unusual syntax. Cross-check important findings with search_code (grep) or read_file. Types: "definitions", "references", "imports", "callers", "affected".',
     input_schema: {
       type: 'object',
       properties: {
@@ -458,7 +458,7 @@ export const GITHUB_TOOLS: ToolDefinition[] = [
   {
     name: 'create_pr',
     description:
-      'Create a GitHub pull request from the current branch. Requires changes to be committed and pushed first. Automatically generates a title from the branch name if not provided. Use after git_push to complete the workflow.',
+      'Create a GitHub pull request. Requires changes committed and pushed first (use git_push — it auto-sets upstream for new branches). Base branch resolution order: explicit `base` param → session base branch (if set via /basebranch) → repo default branch. When the user has named a base branch for the session, ALWAYS pass `base` explicitly to keep PRs consistent.',
     input_schema: {
       type: 'object',
       properties: {
@@ -472,7 +472,11 @@ export const GITHUB_TOOLS: ToolDefinition[] = [
         },
         base: {
           type: 'string',
-          description: 'Base branch to merge into. Defaults to the repository\'s default branch (auto-detected). Override with "main", "master", "develop", etc.',
+          description: 'Base branch to merge INTO (e.g. "main", "develop", "staging"). Prefer passing this explicitly when the user has named a session base branch.',
+        },
+        head: {
+          type: 'string',
+          description: 'Source branch to PR FROM. Optional — defaults to the current checked-out branch. If provided and different from HEAD, the workspace is checked out to that branch before the PR is created.',
         },
         draft: {
           type: 'boolean',
