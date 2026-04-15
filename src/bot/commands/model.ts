@@ -14,7 +14,10 @@ import type { CommandHandler } from './types.js';
 
 /**
  * Static models from cloud providers (always available).
- * Ollama models are fetched dynamically from the server.
+ * Ollama models are fetched dynamically from the server via `/api/tags`, but that
+ * endpoint only lists models already pulled / provisioned. We also seed popular
+ * Ollama library / cloud models here so users can pick them from autocomplete
+ * even before they're downloaded (local Ollama auto-pulls on first use).
  */
 const STATIC_MODELS = [
   // Claude Code (uses host's CLI login / Max plan, or pool API key)
@@ -31,6 +34,22 @@ const STATIC_MODELS = [
   { name: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
   { name: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
   { name: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
+  // Ollama — popular library / cloud models (values use "--" in place of ":" to
+  // match the encodeOllamaModelValue format; decoded back before sending to Ollama)
+  { name: 'Ollama: gpt-oss 20b', value: 'ollama/gpt-oss--20b' },
+  { name: 'Ollama: gpt-oss 120b (cloud)', value: 'ollama/gpt-oss--120b' },
+  { name: 'Ollama: qwen3-coder 30b', value: 'ollama/qwen3-coder--30b' },
+  { name: 'Ollama: qwen3-coder 480b (cloud)', value: 'ollama/qwen3-coder--480b' },
+  { name: 'Ollama: qwen3 8b', value: 'ollama/qwen3--8b' },
+  { name: 'Ollama: qwen3 32b', value: 'ollama/qwen3--32b' },
+  { name: 'Ollama: qwen2.5-coder 7b', value: 'ollama/qwen2.5-coder--7b' },
+  { name: 'Ollama: qwen2.5-coder 14b', value: 'ollama/qwen2.5-coder--14b' },
+  { name: 'Ollama: qwen2.5-coder 32b', value: 'ollama/qwen2.5-coder--32b' },
+  { name: 'Ollama: deepseek-v3.1 671b (cloud)', value: 'ollama/deepseek-v3.1--671b' },
+  { name: 'Ollama: kimi-k2 1t (cloud)', value: 'ollama/kimi-k2--1t' },
+  { name: 'Ollama: glm-4.6 (cloud)', value: 'ollama/glm-4.6' },
+  { name: 'Ollama: llama3.3 70b', value: 'ollama/llama3.3--70b' },
+  { name: 'Ollama: llama3.2 3b', value: 'ollama/llama3.2--3b' },
 ];
 
 /**
@@ -70,27 +89,30 @@ export function createModelCommand(
     async autocomplete(interaction: AutocompleteInteraction) {
       const focused = interaction.options.getFocused().toLowerCase();
       try {
-        // Start with static models
-        const choices: { name: string; value: string }[] = [];
+        // Dedupe by value — dynamic entries (with size info) take precedence
+        // over static ones when the user has the model already pulled.
+        const byValue = new Map<string, { name: string; value: string }>();
 
-        for (const m of STATIC_MODELS) {
-          if (!focused || m.name.toLowerCase().includes(focused) || m.value.toLowerCase().includes(focused)) {
-            choices.push(m);
-          }
-        }
-
-        // Fetch Ollama models dynamically (with short timeout — non-blocking)
+        // Fetch Ollama models dynamically first (with short timeout — non-blocking)
         const ollamaModels = await listOllamaModels();
         for (const m of ollamaModels) {
           const displayName = `Ollama: ${m.name} (${formatModelSize(m.size)})`;
           const value = encodeOllamaModelValue(m.name);
           if (!focused || displayName.toLowerCase().includes(focused) || m.name.toLowerCase().includes(focused)) {
-            choices.push({ name: displayName.slice(0, 100), value });
+            byValue.set(value, { name: displayName.slice(0, 100), value });
+          }
+        }
+
+        // Then add static models (won't overwrite dynamic entries)
+        for (const m of STATIC_MODELS) {
+          if (byValue.has(m.value)) continue;
+          if (!focused || m.name.toLowerCase().includes(focused) || m.value.toLowerCase().includes(focused)) {
+            byValue.set(m.value, m);
           }
         }
 
         // Discord limits to 25 autocomplete results
-        await interaction.respond(choices.slice(0, 25));
+        await interaction.respond([...byValue.values()].slice(0, 25));
       } catch (err) {
         logger.debug({ err }, 'Model autocomplete failed');
         // Fallback to static models only

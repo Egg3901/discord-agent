@@ -8,6 +8,7 @@ import { SessionManager } from '../../sessions/sessionManager.js';
 import { BotColors } from '../../utils/embedHelpers.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
 import { rateLimitEmbed } from '../../utils/embedHelpers.js';
+import { config } from '../../config.js';
 
 // System prompt for code suggestions
 const CODE_SUGGESTION_SYSTEM = `You are an expert code reviewer specializing in providing actionable suggestions for code improvements. 
@@ -107,12 +108,13 @@ export function createSuggestCommand(
           },
         ];
 
-        // Get suggestions from the AI
+        // Get suggestions from the AI using the configured default model
+        // so the command works regardless of which providers the operator has set up.
         const suggestions = await aiClient.getResponse(
           messages,
-          { 
-            modelOverride: 'claude-sonnet-4-6',
-            enableTools: false 
+          {
+            modelOverride: config.ANTHROPIC_MODEL,
+            enableTools: false,
           }
         );
 

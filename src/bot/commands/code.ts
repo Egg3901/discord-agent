@@ -107,7 +107,14 @@ export function createCodeCommand(
         }
 
         // --- Prompt improvement flow ---
-        const improved = await generateImprovedPrompt(aiClient, originalPrompt);
+        // Non-fatal: if improvement fails (no API keys, provider error, etc.)
+        // we still start the coding session with the original prompt.
+        let improved = originalPrompt;
+        try {
+          improved = await generateImprovedPrompt(aiClient, originalPrompt);
+        } catch (err) {
+          logger.warn({ err }, 'Prompt improvement threw; continuing with original prompt');
+        }
         const meaningfullyDifferent = improved.trim() !== originalPrompt.trim() && improved.length > 0;
 
         if (meaningfullyDifferent) {
