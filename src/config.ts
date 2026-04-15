@@ -19,9 +19,9 @@ class Config {
   readonly DISCORD_CLIENT_ID = required('DISCORD_CLIENT_ID');
   readonly DISCORD_GUILD_ID = process.env['DISCORD_GUILD_ID'] || null;
 
-  // Default model — uses Claude Code CLI (Max plan) by default.
+  // Default model — uses Ollama (local) by default.
   // Set ANTHROPIC_MODEL env var or use /config set ANTHROPIC_MODEL to override.
-  ANTHROPIC_MODEL = optional('ANTHROPIC_MODEL', 'claude-code');
+  ANTHROPIC_MODEL = optional('ANTHROPIC_MODEL', 'ollama/qwen2.5-coder:7b');
 
   // GitHub
   GITHUB_TOKEN: string | null = process.env['GITHUB_TOKEN'] || null;
@@ -78,7 +78,7 @@ class Config {
    * NOTE: Values are intentionally never exposed back to users.
    */
   static readonly SETTABLE_KEYS: Record<string, { type: 'string' | 'number'; description: string }> = {
-    ANTHROPIC_MODEL: { type: 'string', description: 'Default Claude model for new sessions' },
+    ANTHROPIC_MODEL: { type: 'string', description: 'Default AI model for new sessions (e.g. ollama/, gemini-, claude-3-*). Default: ollama/qwen2.5-coder:7b' },
     GITHUB_TOKEN: { type: 'string', description: 'GitHub personal access token for repo fetching' },
     MAX_SESSIONS_PER_USER: { type: 'number', description: 'Max concurrent sessions per user' },
     MAX_REQUESTS_PER_MINUTE: { type: 'number', description: 'Max requests per user per minute' },
