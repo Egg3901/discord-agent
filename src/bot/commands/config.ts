@@ -22,10 +22,14 @@ export function createConfigCommand(): CommandHandler {
               .setDescription('Config key to set')
               .setRequired(true)
               .addChoices(
-                ...config.listSettableKeys().map((k) => ({
-                  name: `${k.key} (${k.description})`,
-                  value: k.key,
-                })),
+                ...config.listSettableKeys().map((k) => {
+                  // Discord choice names are limited to 100 characters.
+                  const full = `${k.key} — ${k.description}`;
+                  return {
+                    name: full.length > 100 ? `${full.slice(0, 97)}...` : full,
+                    value: k.key,
+                  };
+                }),
               ),
           )
           .addStringOption((opt) =>
