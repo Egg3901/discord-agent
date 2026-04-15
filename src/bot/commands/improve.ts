@@ -2,6 +2,7 @@ import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.j
 import type { AIClient } from '../../claude/aiClient.js';
 import { isAdmin } from '../middleware/permissions.js';
 import { logger } from '../../utils/logger.js';
+import { config } from '../../config.js';
 import type { CommandHandler } from './types.js';
 import type { GuildMember } from 'discord.js';
 import { RateLimiter } from '../middleware/rateLimiter.js';
@@ -23,6 +24,10 @@ Return ONLY the improved prompt as plain text. Do not include any explanations, 
 /**
  * Generate an improved version of a prompt using AI.
  * Used by /code command for the prompt improvement flow.
+ *
+ * Uses whatever default model is configured (Ollama, Claude Code, Anthropic, Gemini)
+ * so the flow works regardless of which providers the operator has set up.
+ * Returns the original prompt on any error so /code can proceed.
  */
 export async function generateImprovedPrompt(aiClient: AIClient, prompt: string): Promise<string> {
   const messages = [
@@ -31,10 +36,15 @@ export async function generateImprovedPrompt(aiClient: AIClient, prompt: string)
       content: `${IMPROVE_PROMPT_SYSTEM}\n\nHere is the prompt to improve:\n${prompt}`,
     },
   ];
-  return aiClient.getResponse(messages, {
-    modelOverride: 'claude-sonnet-4-6',
-    enableTools: false,
-  });
+  try {
+    return await aiClient.getResponse(messages, {
+      modelOverride: config.ANTHROPIC_MODEL,
+      enableTools: false,
+    });
+  } catch (err) {
+    logger.warn({ err }, 'Prompt improvement failed; falling back to original prompt');
+    return prompt;
+  }
 }
 
 export function createImproveCommand(aiClient: AIClient, rateLimiter: RateLimiter): CommandHandler {
@@ -76,12 +86,13 @@ export function createImproveCommand(aiClient: AIClient, rateLimiter: RateLimite
           { role: 'user' as const, content: `${IMPROVE_PROMPT_SYSTEM}\n\nHere is the prompt to improve:\n${originalPrompt}` },
         ];
 
-        // Get the improved prompt from the AI
+        // Get the improved prompt from the AI using the configured default model
+        // so the command works regardless of which providers the operator has set up.
         const improvedPrompt = await aiClient.getResponse(
           messages,
-          { 
-            modelOverride: 'claude-sonnet-4-6', // Use a reliable model for prompt improvement
-            enableTools: false 
+          {
+            modelOverride: config.ANTHROPIC_MODEL,
+            enableTools: false,
           }
         );
 

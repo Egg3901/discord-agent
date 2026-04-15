@@ -8,13 +8,15 @@ import { config } from '../../config.js';
 import { SessionManager } from '../../sessions/sessionManager.js';
 import { isAdmin } from '../middleware/permissions.js';
 import { formatApiError } from '../../utils/errors.js';
-import { listOllamaModels, formatModelSize } from '../../claude/ollamaModels.js';
+import { listOllamaModels, listOllamaLibrary, formatModelSize } from '../../claude/ollamaModels.js';
 import { logger } from '../../utils/logger.js';
 import type { CommandHandler } from './types.js';
 
 /**
- * Static models from cloud providers (always available).
- * Ollama models are fetched dynamically from the server.
+ * Static cloud-provider models (always available — no live source to fetch).
+ * Ollama entries are pulled live from ollama.com/search (see listOllamaLibrary)
+ * and from the user's server (`/api/tags`). A tiny static fallback is kept at
+ * the bottom in case both network paths fail.
  */
 const STATIC_MODELS = [
   // Claude Code (uses host's CLI login / Max plan, or pool API key)
@@ -31,6 +33,30 @@ const STATIC_MODELS = [
   { name: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
   { name: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
   { name: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash' },
+];
+
+/**
+ * Minimal Ollama fallback — only used when both listOllamaLibrary() and
+ * listOllamaModels() return empty (e.g. offline bot host + no local server).
+ */
+const STATIC_OLLAMA_FALLBACK = [
+  { name: 'Ollama: qwen2.5-coder 7b', value: 'ollama/qwen2.5-coder--7b' },
+  { name: 'Ollama: llama3.2 3b', value: 'ollama/llama3.2--3b' },
+];
+
+/**
+ * Cloud-only Ollama models (hosted on ollama.com; not pullable to local).
+ * These require OLLAMA_BASE_URL=https://ollama.com and a valid OLLAMA_API_KEY.
+ * Keep this list short and current — the `-cloud` tag is the canonical cloud
+ * variant per the Ollama cloud docs.
+ */
+const CLOUD_ONLY_OLLAMA_MODELS = [
+  { name: 'Ollama ☁: gpt-oss 120b', value: 'ollama/gpt-oss--120b-cloud' },
+  { name: 'Ollama ☁: qwen3-coder 480b', value: 'ollama/qwen3-coder--480b-cloud' },
+  { name: 'Ollama ☁: deepseek-v3.1 671b', value: 'ollama/deepseek-v3.1--671b-cloud' },
+  { name: 'Ollama ☁: kimi-k2 1t', value: 'ollama/kimi-k2--1t-cloud' },
+  { name: 'Ollama ☁: glm-4.6', value: 'ollama/glm-4.6--cloud' },
+  { name: 'Ollama ☁: minimax-m2', value: 'ollama/minimax-m2--cloud' },
 ];
 
 /**
@@ -70,33 +96,76 @@ export function createModelCommand(
     async autocomplete(interaction: AutocompleteInteraction) {
       const focused = interaction.options.getFocused().toLowerCase();
       try {
-        // Start with static models
-        const choices: { name: string; value: string }[] = [];
+        // Dedupe by value. Priority: already-pulled > live library > cloud-only
+        // curated > static fallback. Live sources run in parallel.
+        const byValue = new Map<string, { name: string; value: string }>();
+        const matches = (label: string, value: string) =>
+          !focused ||
+          label.toLowerCase().includes(focused) ||
+          value.toLowerCase().includes(focused);
 
-        for (const m of STATIC_MODELS) {
-          if (!focused || m.name.toLowerCase().includes(focused) || m.value.toLowerCase().includes(focused)) {
-            choices.push(m);
-          }
-        }
+        const [ollamaModels, libraryModels] = await Promise.all([
+          listOllamaModels(),
+          listOllamaLibrary(),
+        ]);
 
-        // Fetch Ollama models dynamically (with short timeout — non-blocking)
-        const ollamaModels = await listOllamaModels();
+        // 1. Models already pulled / provisioned on the user's Ollama server.
         for (const m of ollamaModels) {
           const displayName = `Ollama: ${m.name} (${formatModelSize(m.size)})`;
           const value = encodeOllamaModelValue(m.name);
-          if (!focused || displayName.toLowerCase().includes(focused) || m.name.toLowerCase().includes(focused)) {
-            choices.push({ name: displayName.slice(0, 100), value });
+          if (matches(displayName, value)) {
+            byValue.set(value, { name: displayName.slice(0, 100), value });
+          }
+        }
+
+        // 2. Live library entries from ollama.com/search — one choice per
+        //    size variant so users can pick the exact tag. Base ":latest" is
+        //    emitted only when no sizes are advertised.
+        for (const m of libraryModels) {
+          const variants = m.sizes.length > 0 ? m.sizes : [''];
+          for (const size of variants) {
+            const tagged = size ? `${m.name}:${size}` : m.name;
+            const value = encodeOllamaModelValue(tagged);
+            if (byValue.has(value)) continue;
+            const label = size
+              ? `Ollama: ${m.name} ${size}${m.pulls ? ` • ${m.pulls} pulls` : ''}`
+              : `Ollama: ${m.name}${m.pulls ? ` • ${m.pulls} pulls` : ''}`;
+            if (matches(label, value)) {
+              byValue.set(value, { name: label.slice(0, 100), value });
+            }
+          }
+        }
+
+        // 3. Cloud-only models (ollama.com-hosted). These aren't always
+        //    present in /search scrape output and can't be pulled locally,
+        //    so keep a curated short-list pinned here.
+        for (const m of CLOUD_ONLY_OLLAMA_MODELS) {
+          if (byValue.has(m.value)) continue;
+          if (matches(m.name, m.value)) byValue.set(m.value, m);
+        }
+
+        // 4. Static cloud-provider models (Claude, Gemini, Claude Code).
+        for (const m of STATIC_MODELS) {
+          if (byValue.has(m.value)) continue;
+          if (matches(m.name, m.value)) byValue.set(m.value, m);
+        }
+
+        // 5. Last-resort Ollama fallback if both live sources were empty.
+        if (ollamaModels.length === 0 && libraryModels.length === 0) {
+          for (const m of STATIC_OLLAMA_FALLBACK) {
+            if (byValue.has(m.value)) continue;
+            if (matches(m.name, m.value)) byValue.set(m.value, m);
           }
         }
 
         // Discord limits to 25 autocomplete results
-        await interaction.respond(choices.slice(0, 25));
+        await interaction.respond([...byValue.values()].slice(0, 25));
       } catch (err) {
         logger.debug({ err }, 'Model autocomplete failed');
-        // Fallback to static models only
-        const fallback = STATIC_MODELS.filter(
-          (m) => !focused || m.name.toLowerCase().includes(focused) || m.value.toLowerCase().includes(focused),
-        );
+        // Fallback: static cloud providers + curated cloud-only Ollama list +
+        // a tiny local Ollama fallback. No live network needed.
+        const fallback = [...STATIC_MODELS, ...CLOUD_ONLY_OLLAMA_MODELS, ...STATIC_OLLAMA_FALLBACK]
+          .filter((m) => !focused || m.name.toLowerCase().includes(focused) || m.value.toLowerCase().includes(focused));
         await interaction.respond(fallback.slice(0, 25));
       }
     },
@@ -115,11 +184,16 @@ export function createModelCommand(
         const scope = interaction.options.getString('scope') || 'session';
 
         // Build a human-readable label
-        const staticMatch = STATIC_MODELS.find((m) => m.value === model);
+        const staticMatch =
+          STATIC_MODELS.find((m) => m.value === model) ||
+          CLOUD_ONLY_OLLAMA_MODELS.find((m) => m.value === model) ||
+          STATIC_OLLAMA_FALLBACK.find((m) => m.value === model);
         const modelLabel = staticMatch?.name ?? model.replace(/^ollama\//, '').replace(/--/g, ':');
+        const isOllamaCloud = model.startsWith('ollama/') && /(^|[-:])cloud$/.test(model);
         const provider = model === 'claude-code' || model.startsWith('claude-code-')
           ? 'Claude Code'
           : model.startsWith('gemini-') ? 'Google'
+          : isOllamaCloud ? 'Ollama Cloud'
           : model.startsWith('ollama/') ? 'Ollama'
           : 'Anthropic';
 
