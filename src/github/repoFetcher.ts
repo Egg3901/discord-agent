@@ -10,6 +10,33 @@ export interface FetchedFile {
 const MAX_FILE_SIZE = 100_000; // 100KB per file
 const MAX_TOTAL_FILES = 20;
 
+/**
+ * Retry a function on transient GitHub/network errors (5xx, rate-limit, ECONNRESET,
+ * timeout). 4xx client errors (404, 422, permission) are NOT retried — they're
+ * deterministic and retrying wastes time.
+ */
+async function withRetry<T>(fn: () => Promise<T>, label: string, maxAttempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      const status: number | undefined = err?.status ?? err?.response?.status;
+      const code: string | undefined = err?.code;
+      const transient =
+        (typeof status === 'number' && (status >= 500 || status === 429)) ||
+        code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ENOTFOUND' ||
+        /timeout|network|socket hang up/i.test(err?.message || '');
+      if (!transient || attempt === maxAttempts) throw err;
+      const delay = 250 * 2 ** (attempt - 1) + Math.floor(Math.random() * 100);
+      logger.warn({ label, attempt, status, code, delay }, 'Retrying transient GitHub error');
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 export class RepoFetcher {
   private _octokit: Octokit | null = null;
   private _octokitToken: string | null = null;
@@ -92,11 +119,10 @@ export class RepoFetcher {
 
     for (const path of paths.slice(0, MAX_TOTAL_FILES)) {
       try {
-        const { data } = await this.octokit.repos.getContent({
-          owner,
-          repo,
-          path,
-        });
+        const { data } = await withRetry(
+          () => this.octokit.repos.getContent({ owner, repo, path }),
+          `getContent:${path}`,
+        );
 
         if ('content' in data && data.type === 'file') {
           const content = Buffer.from(data.content, 'base64').toString('utf-8');
@@ -236,12 +262,15 @@ export class RepoFetcher {
    * Get the file tree of a repository.
    */
   async getTree(owner: string, repo: string): Promise<string[]> {
-    const { data: tree } = await this.octokit.git.getTree({
-      owner,
-      repo,
-      tree_sha: 'HEAD',
-      recursive: 'true',
-    });
+    const { data: tree } = await withRetry(
+      () => this.octokit.git.getTree({
+        owner,
+        repo,
+        tree_sha: 'HEAD',
+        recursive: 'true',
+      }),
+      'git.getTree',
+    );
 
     const paths = tree.tree
       .filter((item) => item.type === 'blob' && item.path)
@@ -262,11 +291,14 @@ export class RepoFetcher {
     repo: string,
     path: string,
   ): Promise<string[]> {
-    const { data } = await this.octokit.repos.getContent({
-      owner,
-      repo,
-      path: path || '',
-    });
+    const { data } = await withRetry(
+      () => this.octokit.repos.getContent({
+        owner,
+        repo,
+        path: path || '',
+      }),
+      'repos.getContent',
+    );
 
     if (!Array.isArray(data)) {
       return [`[file] ${(data as any).name}`];
@@ -287,13 +319,16 @@ export class RepoFetcher {
     repo: string,
     query: string,
   ): Promise<{ path: string; snippet: string }[]> {
-    const { data } = await this.octokit.search.code({
-      q: `${query} repo:${owner}/${repo}`,
-      per_page: 10,
-      headers: {
-        accept: 'application/vnd.github.text-match+json',
-      },
-    });
+    const { data } = await withRetry(
+      () => this.octokit.search.code({
+        q: `${query} repo:${owner}/${repo}`,
+        per_page: 10,
+        headers: {
+          accept: 'application/vnd.github.text-match+json',
+        },
+      }),
+      'search.code',
+    );
 
     return data.items.map((item: any) => ({
       path: item.path,

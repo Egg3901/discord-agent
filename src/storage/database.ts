@@ -117,6 +117,21 @@ function runMigrations(db: Database.Database): void {
       added_at INTEGER NOT NULL
     );
   `);
+
+  // Migration: tool_metrics — per-tool invocation telemetry so we can see
+  // which tools are failing or slow via /toolstats.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tool_metrics (
+      tool_name TEXT PRIMARY KEY,
+      total_count INTEGER NOT NULL DEFAULT 0,
+      error_count INTEGER NOT NULL DEFAULT 0,
+      empty_count INTEGER NOT NULL DEFAULT 0,
+      total_duration_ms INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      last_error_at INTEGER,
+      last_called_at INTEGER
+    );
+  `);
 }
 
 export function logUsage(entry: {

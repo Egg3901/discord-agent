@@ -1,9 +1,10 @@
 import { RepoFetcher } from '../github/repoFetcher.js';
 import { executeScript, sandboxWriteFile, sandboxReadFile, sandboxListFiles, getSandboxDir } from './scriptExecutor.js';
-import { DevToolExecutor, GIT_TOOL_NAMES, WORKSPACE_TOOL_NAMES, ADVANCED_TOOL_NAMES, ensureGitWorkspace } from './devToolExecutor.js';
+import { DevToolExecutor, GIT_TOOL_NAMES, WORKSPACE_TOOL_NAMES, ADVANCED_TOOL_NAMES, ensureGitWorkspace, grepWorkspace } from './devToolExecutor.js';
 import { webSearch, webFetch } from './webSearchExecutor.js';
 import { editFile } from './fileEditor.js';
 import { findDefinitions, findReferences, analyzeImports, findCallers, affectedFiles } from './codeAnalyzer.js';
+import { classifyToolResult, recordToolInvocation } from './toolMetrics.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
@@ -110,7 +111,35 @@ export class ToolExecutor {
     return this.secondarySandboxDir;
   }
 
+  /**
+   * Public entry point: runs the tool and records telemetry (duration, error
+   * classification) so we can surface per-tool health via /toolstats.
+   */
   async execute(
+    toolName: string,
+    input: Record<string, unknown>,
+  ): Promise<string | typeof REQUEST_INPUT_RESULT> {
+    const started = Date.now();
+    let result: string | typeof REQUEST_INPUT_RESULT;
+    try {
+      result = await this.executeInner(toolName, input);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const durationMs = Date.now() - started;
+      recordToolInvocation(toolName, durationMs, 'error', msg.slice(0, 500));
+      throw err;
+    }
+    // Skip metrics for the REQUEST_INPUT symbol — it's an interactive pause, not a real result.
+    if (result !== REQUEST_INPUT_RESULT && typeof result === 'string') {
+      const durationMs = Date.now() - started;
+      const cls = classifyToolResult(result);
+      const firstLine = cls === 'error' ? result.split('\n')[0].slice(0, 500) : null;
+      recordToolInvocation(toolName, durationMs, cls, firstLine);
+    }
+    return result;
+  }
+
+  private async executeInner(
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<string | typeof REQUEST_INPUT_RESULT> {
@@ -234,7 +263,8 @@ export class ToolExecutor {
           if (typeof query !== 'string' || query.length === 0 || query.length > MAX_QUERY_LENGTH) {
             return 'Error: query must be a non-empty string (max 200 chars)';
           }
-          result = await this.searchCode(query);
+          const isRegex = input.regex === true || input.is_regex === true;
+          result = await this.searchCode(query, isRegex);
           break;
         }
         case 'search_files': {
@@ -354,11 +384,25 @@ export class ToolExecutor {
         // Determine current branch from workspace
         const sandbox = await this.getSandbox();
         const { execSync } = await import('node:child_process');
-        let head: string;
+        let currentBranch: string;
         try {
-          head = execSync('git rev-parse --abbrev-ref HEAD', { cwd: sandbox, encoding: 'utf-8', timeout: 5000 }).trim();
+          currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: sandbox, encoding: 'utf-8', timeout: 5000 }).trim();
         } catch {
           return 'Error: Could not determine current branch. Make sure you are in a git repository with commits.';
+        }
+
+        // Optional `head` param: switch to that branch first if it exists.
+        const explicitHead = typeof input.head === 'string' && input.head.trim() ? input.head.trim() : null;
+        let head = currentBranch;
+        let checkoutNote = '';
+        if (explicitHead && explicitHead !== currentBranch) {
+          try {
+            execSync(`git checkout ${JSON.stringify(explicitHead)}`, { cwd: sandbox, encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] });
+            head = explicitHead;
+            checkoutNote = `[auto: checked out ${explicitHead} before creating PR]\n`;
+          } catch (err: any) {
+            return `Error: Could not check out branch "${explicitHead}": ${err.message || err}. Ensure it exists (git_branch to list) or create it with git_checkout "-b ${explicitHead}".`;
+          }
         }
 
         const base = (typeof input.base === 'string' && input.base) ? input.base : (this.defaultBranch || 'main');
@@ -372,13 +416,13 @@ export class ToolExecutor {
 
         try {
           const result = await this.repoFetcher.createPR(this.owner, this.repo, head, base, title, body, draft);
-          return `PR created successfully!\n**PR #${result.number}:** ${title}\n**URL:** ${result.url}`;
+          return `${checkoutNote}PR created successfully!\n**PR #${result.number}:** ${title} (${head} → ${base})\n**URL:** ${result.url}`;
         } catch (err: any) {
           const msg = err.message || String(err);
           if (msg.includes('already exists')) {
             return `Error: A pull request already exists for branch "${head}" → "${base}". ${msg}`;
           }
-          return `Error creating PR: ${msg}`;
+          return `Error creating PR (${head} → ${base}): ${msg}`;
         }
       }
 
@@ -487,6 +531,12 @@ export class ToolExecutor {
       return `File not found: ${path}`;
     }
     const content = files[0].content;
+    // Detect binary content (null bytes in the first 2KB) — GitHub's API happily
+    // returns base64-decoded bytes and we'd otherwise render garbled mojibake.
+    const probe = content.slice(0, 2048);
+    if (probe.includes('\u0000')) {
+      return `[binary file: ${path} — ${Math.round(content.length / 1024)} KiB, not displayed]\nIf you need the content, download it via run_terminal or skip it.`;
+    }
     if (content.length > MAX_FILE_CONTENT) {
       return content.slice(0, MAX_FILE_CONTENT) + `\n\n[Truncated — file is ${Math.round(content.length / 1000)}KB]`;
     }
@@ -498,13 +548,41 @@ export class ToolExecutor {
     if (entries.length === 0) {
       return `Directory is empty or not found: ${path || '/'}`;
     }
-    return entries.join('\n');
+    // GitHub's getContent caps at 1000 entries for a directory listing. If we
+    // got exactly 1000 back, warn the model that there may be more.
+    const warning = entries.length >= 1000
+      ? `\n\n[WARNING: GitHub's API caps directory listings at 1000 entries. This response may be truncated. Use search_files with a glob pattern to drill down.]`
+      : '';
+    return entries.join('\n') + warning;
   }
 
-  private async searchCode(query: string): Promise<string> {
+  private async searchCode(query: string, isRegex = false): Promise<string> {
+    // Prefer local grep over the cloned workspace when dev tools are enabled —
+    // GitHub's code-search API is token-indexed and can't match punctuation,
+    // substrings, or symbols like `formatCurrency(`. A real grep can.
+    if (config.ENABLE_DEV_TOOLS && this.repoUrl) {
+      try {
+        const sandbox = await this.getSandbox();
+        const grep = await grepWorkspace(sandbox, query, { isRegex });
+        if (grep.ok) return grep.output;
+        logger.warn({ query, err: grep.output }, 'Local grep failed, falling back to GitHub search API');
+      } catch (err) {
+        logger.warn({ err, query }, 'Workspace grep threw, falling back to GitHub search API');
+      }
+    }
+
+    // Fallback: GitHub code search API. Regex not supported here.
     const results = await this.repoFetcher!.searchCode(this.owner, this.repo, query);
     if (results.length === 0) {
-      return `No results found for: ${query}`;
+      return (
+        `No results found for \`${query}\` via GitHub code search.\n\n` +
+        `Note: GitHub's code search is token-indexed — it cannot match punctuation (e.g. \`foo(\`), ` +
+        `substrings within identifiers, or symbols. Try:\n` +
+        `- A different token (e.g. the function name alone without \`(\`)\n` +
+        `- \`search_files\` to find files by name, then \`read_file\` to inspect\n` +
+        `- \`analyze_code\` for symbol definitions/references` +
+        (config.ENABLE_DEV_TOOLS ? '' : `\n- Ask an admin to enable dev tools for a real grep-backed search`)
+      );
     }
     return results
       .map((r: { path: string; snippet: string }, i: number) => `[${i + 1}] ${r.path}\n${r.snippet}`)
@@ -571,8 +649,26 @@ export class ToolExecutor {
         if (typeof query !== 'string' || query.length === 0 || query.length > MAX_QUERY_LENGTH) {
           return 'Error: query must be a non-empty string (max 200 chars)';
         }
+        const isRegex = input.regex === true || input.is_regex === true;
+
+        if (config.ENABLE_DEV_TOOLS && this.secondaryRepoUrl) {
+          try {
+            const sandbox = await this.getSecondarySandbox();
+            const grep = await grepWorkspace(sandbox, query, { isRegex });
+            if (grep.ok) return grep.output;
+          } catch (err) {
+            logger.warn({ err, query }, 'Secondary workspace grep failed, falling back to GitHub search API');
+          }
+        }
+
         const results = await this.repoFetcher!.searchCode(o, r, query);
-        if (results.length === 0) return `No results found in secondary repo for: ${query}`;
+        if (results.length === 0) {
+          return (
+            `No results found in secondary repo for \`${query}\` via GitHub code search.\n\n` +
+            `Note: GitHub's code search is token-indexed and cannot match punctuation or substrings. ` +
+            `Try a different token, or use secondary_search_files + secondary_read_file.`
+          );
+        }
         return results.map((res: { path: string; snippet: string }, i: number) =>
           `[${i + 1}] ${res.path}\n${res.snippet}`).join('\n\n---\n\n');
       }

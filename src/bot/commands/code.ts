@@ -275,6 +275,8 @@ export function createCodeCommand(
           modelOverride: session.modelOverride,
           sessionId: session.id,
           customSystemPrompt: session.systemPrompt,
+          sessionBaseBranch: session.defaultBranch,
+          sessionSecondaryBaseBranch: session.secondaryDefaultBranch,
           onQueuePosition: (pos: number) => {
             thinkingMsg.edit(`In queue (position ${pos})...`).catch(() => {});
           },

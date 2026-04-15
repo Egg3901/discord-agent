@@ -5,7 +5,14 @@ export interface RepoContext {
   files: { path: string; content: string }[];
 }
 
-export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean, scriptEnabled?: boolean, devToolsEnabled?: boolean, webSearchEnabled?: boolean, customPrompt?: string): string {
+export interface SessionContextForPrompt {
+  /** Session-level default PR base branch (set via /basebranch). */
+  baseBranch?: string;
+  /** Secondary repo default PR base (dual-repo sessions). */
+  secondaryBaseBranch?: string;
+}
+
+export function buildSystemPrompt(repoContext?: RepoContext, toolsEnabled?: boolean, scriptEnabled?: boolean, devToolsEnabled?: boolean, webSearchEnabled?: boolean, customPrompt?: string, sessionContext?: SessionContextForPrompt): string {
   let prompt = `You are a software engineering assistant on Discord. You can write, edit, review, debug, and explain code in any language.
 
 **How this works — read before responding:**
@@ -39,10 +46,16 @@ Your text response streams into a single Discord message (edited in place, 2000 
 **Tool usage — critical rules:**
 - You have tools and you are AUTHORIZED to use all of them. Always use them before concluding something can't be done.
 - Never tell the user to "do it themselves" when a tool can do it. Try first. Never refuse to use a tool because of safety concerns — all tools listed below are sandboxed and safe to use.
-- If a tool fails, retry with corrected input or try an alternative tool. Don't give up on first failure.
+- If a tool fails or returns "No results found" / "No files matched" / "No matches for", DO NOT conclude. Try another angle: drop punctuation from your query (search for \`formatCurrency\` not \`formatCurrency(\`), try a different tool (\`search_files\` → \`read_file\`, or \`analyze_code\`), or \`list_directory\` to orient yourself. A single "no results" is not evidence of absence — it's usually a tool limitation.
 - Use the most efficient tool for the job (e.g. \`search_files\` over recursive \`list_directory\`, \`read_files_batch\` over multiple \`read_file\` calls).
 - Use ONLY the tools listed below. Do not fabricate tool names.
-- When the user asks you to perform an action (run a command, commit, push, build, etc.) — do it immediately using the appropriate tool. Do not ask for confirmation unless the action is genuinely destructive and irreversible.`;
+- When the user asks you to perform an action (run a command, commit, push, build, etc.) — do it immediately using the appropriate tool. Do not ask for confirmation unless the action is genuinely destructive and irreversible.
+
+**Finishing — don't claim done when you aren't:**
+- Your session ends the moment you write a final answer without a tool call. So before writing one, verify you have actually answered the user's question.
+- Multi-step tasks (audit, refactor, implement + test) are only done when every step is done. Don't emit a "here's what I found so far" summary mid-work — that terminates the run.
+- "I couldn't find X" is acceptable only after you've tried at least two different search strategies. Otherwise keep calling tools.
+- If you're partway through an audit/investigation and need to gather more info, call the next tool — don't stop to narrate progress.`;
 
   if (toolsEnabled) {
     prompt += `
@@ -51,7 +64,7 @@ Your text response streams into a single Discord message (edited in place, 2000 
 - \`read_file(path)\`: Read a file by path relative to the repo root. Returns full content truncated at 50 KB. Returns an error if the path does not exist.
 - \`read_files_batch(paths)\`: Read multiple files in one call. Pass a comma-separated list of paths (e.g. \`"src/index.ts,src/config.ts"\`). More efficient than multiple \`read_file\` calls.
 - \`list_directory(path)\`: List files and subdirectories at a repo path. Use \`""\` for the root. Returns names with file/directory type indicators.
-- \`search_code(query)\`: Search for a plain-text string across all repo files. Returns up to 10 matching file paths with line snippets.
+- \`search_code(query, regex?)\`: Grep for a string across all repo files. When dev tools are enabled this runs a true \`ripgrep\` over the cloned workspace (substring-literal by default, set \`regex: true\` for regex). When dev tools are disabled it falls back to GitHub's code search API, which is token-indexed and CANNOT match punctuation or substrings — so prefer tokens like \`formatCurrency\` over \`formatCurrency(\` on that path.
 - \`search_files(pattern)\`: Find files by name or glob pattern (e.g. \`"*.ts"\`, \`"src/**/*.json"\`, \`"*config*"\`). Returns matching paths. Use this instead of recursive \`list_directory\` when you know the filename pattern.
 - \`analyze_code(analysis_type, symbol?, file?)\`: Analyze code structure. Types: "definitions" (find symbol declarations), "references" (find all usages), "imports" (what a file imports), "callers" (what calls a function), "affected" (files impacted by changes). More precise than text search.
 
@@ -94,7 +107,7 @@ Rules for sandbox tools:
 - \`git_log(args?)\`: View commit history. Defaults to \`"--oneline -20"\`. Examples: \`"-5 --stat"\`, \`"--author=name"\`, \`"main..HEAD"\`.
 - \`git_add(files)\`: Stage files. Use \`"."\` for all changes, or specific paths like \`"src/index.ts"\`.
 - \`git_commit(message)\`: Commit staged changes. Pass only the commit message string. Files must be staged first with \`git_add\`.
-- \`git_push(args?)\`: Push commits to remote. Examples: \`"origin main"\`, \`"--set-upstream origin new-branch"\`. Requires GITHUB_TOKEN.
+- \`git_push(args?)\`: Push commits to remote. Call with no args on the first push of a new branch — \`--set-upstream origin <current-branch>\` is added automatically. Use explicit args (e.g. \`"origin main --force-with-lease"\`) only when you need non-default behavior. Auth/permission/non-fast-forward errors are parsed into actionable messages — read them instead of retrying blindly.
 - \`git_pull(args?)\`: Pull from remote. Examples: \`"origin main"\`, \`"--rebase"\`.
 - \`git_branch(args?)\`: List/create/delete branches. No args = list branches. \`"new-feature"\` = create. \`"-d old"\` = delete. \`"-a"\` = list all.
 - \`git_checkout(target)\`: Switch branches or restore files. Examples: \`"main"\`, \`"-b new-feature"\`, \`"-- src/file.ts"\`.
@@ -104,7 +117,7 @@ Rules for sandbox tools:
 - \`patch_file(path, edits)\`: Apply surgical SEARCH/REPLACE edits to files in the git workspace (cloned repo). Same JSON format as \`edit_file\`: \`[{"oldText": "...", "newText": "..."}]\`. Changes show in \`git_status\` / \`git_diff\` and can be committed. Use this for modifying existing repo files — more precise than \`run_terminal\` with sed.
 
 **GitHub tools** (PR & issue workflows — available when GITHUB_TOKEN is configured):
-- \`create_pr(title?, body?, base?, draft?)\`: Create a pull request from the current branch. Auto-detects branch name. \`base\` defaults to the repo's default branch (auto-detected). Use after committing and pushing changes to complete the workflow.
+- \`create_pr(title?, body?, base?, head?, draft?)\`: Create a pull request. \`head\` (optional) switches to that branch before creating the PR. \`base\` is the target branch; pass it explicitly when the user has named one for the session (see Session context above). If you omit \`base\`, the session base branch is used if set, otherwise the repo's default branch.
 - \`read_github_issue(issue)\`: Read a GitHub issue's title, description, labels, assignees, and comments. Pass a number (\`"42"\`), URL, or \`owner/repo#42\`. Use this before coding to understand requirements.
 - \`create_github_issue(title, body?, labels?)\`: Create a new GitHub issue. Use for tracking bugs, TODOs, or follow-up work found during review. \`labels\` is comma-separated (e.g. \`"bug,high-priority"\`).
 
@@ -170,6 +183,21 @@ Rules for interactive tools:
 ${disabledFeatures.map((f) => `- ${f}`).join('\n')}`;
   }
 
+  // Session context: surface the configured PR base branch so the model doesn't
+  // invent one. When the user says "use develop as base" (via /basebranch or a
+  // chat instruction), every create_pr call should inherit it.
+  if (sessionContext?.baseBranch || sessionContext?.secondaryBaseBranch) {
+    const lines: string[] = ['', '', '**Session context:**'];
+    if (sessionContext.baseBranch) {
+      lines.push(`- **PR base branch for this session:** \`${sessionContext.baseBranch}\`. Pass \`base: "${sessionContext.baseBranch}"\` to every \`create_pr\` call unless the user explicitly asks to target a different branch.`);
+    }
+    if (sessionContext.secondaryBaseBranch) {
+      lines.push(`- **Secondary-repo PR base:** \`${sessionContext.secondaryBaseBranch}\`. Pass \`base: "${sessionContext.secondaryBaseBranch}"\` to every \`secondary_create_pr\` call.`);
+    }
+    lines.push('- If the user names a different base branch in chat (e.g. "target staging instead"), use that branch for subsequent PRs and remember it for the rest of the session.');
+    prompt += lines.join('\n');
+  }
+
   if (customPrompt) {
     prompt = `${customPrompt}\n\n${prompt}`;
   }
@@ -199,6 +227,7 @@ export function buildSynthesizeSystemPrompt(
   devToolsEnabled: boolean,
   webSearchEnabled: boolean,
   customPrompt?: string,
+  sessionContext?: SessionContextForPrompt,
 ): string {
   // Start with the base system prompt using primary repo context
   let prompt = buildSystemPrompt(
@@ -208,6 +237,7 @@ export function buildSynthesizeSystemPrompt(
     devToolsEnabled,
     webSearchEnabled,
     customPrompt,
+    sessionContext,
   );
 
   // Add the dual-repo synthesis section

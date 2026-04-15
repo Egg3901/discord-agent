@@ -100,6 +100,10 @@ export interface StreamOptions {
   enableSecondaryRepo?: boolean;
   /** Secondary repo context for /synthesize sessions */
   secondaryRepoContext?: RepoContext;
+  /** Session-level PR base branch (from /basebranch), surfaced to the model */
+  sessionBaseBranch?: string;
+  /** Session-level PR base branch for the secondary repo */
+  sessionSecondaryBaseBranch?: string;
 }
 
 /**
@@ -157,6 +161,9 @@ function getActiveTools(options: StreamOptions): import('../tools/toolDefinition
  * Build system prompt, using the dual-repo synthesize version when secondary repo is present.
  */
 function buildSystemPromptForOptions(options: StreamOptions): string {
+  const sessionContext = (options.sessionBaseBranch || options.sessionSecondaryBaseBranch)
+    ? { baseBranch: options.sessionBaseBranch, secondaryBaseBranch: options.sessionSecondaryBaseBranch }
+    : undefined;
   if (options.enableSecondaryRepo && options.secondaryRepoContext && options.repoContext) {
     return buildSynthesizeSystemPrompt(
       options.repoContext,
@@ -166,6 +173,7 @@ function buildSystemPromptForOptions(options: StreamOptions): string {
       config.ENABLE_DEV_TOOLS,
       !!options.enableWebSearch,
       options.customSystemPrompt,
+      sessionContext,
     );
   }
   return buildSystemPrompt(
@@ -175,6 +183,7 @@ function buildSystemPromptForOptions(options: StreamOptions): string {
     config.ENABLE_DEV_TOOLS,
     options.enableWebSearch,
     options.customSystemPrompt,
+    sessionContext,
   );
 }
 
