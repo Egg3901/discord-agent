@@ -204,3 +204,134 @@ export function formatModelSize(bytes: number): string {
   if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(0)}MB`;
   return `${bytes}B`;
 }
+
+// --- Live library listing (from ollama.com/search) -------------------------
+//
+// Ollama has no official JSON search API (ollama/ollama#3922, #7751, #8554,
+// #9142), so to surface "current" models in /model autocomplete without
+// hardcoding, we scrape ollama.com/search. The markup is subject to change;
+// everything below is defensive with caching + graceful fallback so a markup
+// change can never break the bot — it just means /model falls back to the
+// live /api/tags list plus a small curated static list.
+
+export interface LibraryModel {
+  /** Slug used when pulling (e.g. "qwen2.5-coder", "library/llama3"). */
+  name: string;
+  /** Optional short description from the listing card. */
+  description?: string;
+  /** Parameter-size labels shown on the card (e.g. ["7b", "32b"]). */
+  sizes: string[];
+  /** Pull count as rendered on the card (e.g. "6.3M"), if parsable. */
+  pulls?: string;
+}
+
+const LIBRARY_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6h
+const LIBRARY_FETCH_TIMEOUT_MS = 5_000;
+const LIBRARY_PAGES = 3; // top ~75 results
+let libraryCache: LibraryModel[] | null = null;
+let libraryCacheExpiry = 0;
+let inFlightLibraryFetch: Promise<LibraryModel[]> | null = null;
+
+/**
+ * Fetch the most popular models from ollama.com/search.
+ *
+ * Cached for LIBRARY_CACHE_TTL_MS. Concurrent calls share the same in-flight
+ * promise so we never fetch twice in parallel. Returns the previous cached
+ * value (or an empty array) if the network call fails.
+ */
+export async function listOllamaLibrary(): Promise<LibraryModel[]> {
+  const now = Date.now();
+  if (libraryCache && now < libraryCacheExpiry) return libraryCache;
+  if (inFlightLibraryFetch) return inFlightLibraryFetch;
+
+  inFlightLibraryFetch = (async () => {
+    try {
+      const pages = await Promise.all(
+        Array.from({ length: LIBRARY_PAGES }, (_, i) => fetchLibraryPage(i + 1)),
+      );
+      const seen = new Set<string>();
+      const merged: LibraryModel[] = [];
+      for (const page of pages) {
+        for (const m of page) {
+          if (seen.has(m.name)) continue;
+          seen.add(m.name);
+          merged.push(m);
+        }
+      }
+      if (merged.length > 0) {
+        libraryCache = merged;
+        libraryCacheExpiry = now + LIBRARY_CACHE_TTL_MS;
+      }
+      return libraryCache || [];
+    } catch (err) {
+      logger.debug({ err }, 'Failed to fetch Ollama library listing');
+      return libraryCache || [];
+    } finally {
+      inFlightLibraryFetch = null;
+    }
+  })();
+
+  return inFlightLibraryFetch;
+}
+
+async function fetchLibraryPage(page: number): Promise<LibraryModel[]> {
+  const resp = await fetch(`https://ollama.com/search?page=${page}`, {
+    headers: {
+      // ollama.com rejects fetches without a realistic UA.
+      'User-Agent': 'Mozilla/5.0 (discord-agent; +https://github.com/Egg3901/discord-agent)',
+      'Accept': 'text/html',
+    },
+    signal: AbortSignal.timeout(LIBRARY_FETCH_TIMEOUT_MS),
+  });
+  if (!resp.ok) {
+    throw new Error(`ollama.com/search page ${page} returned ${resp.status}`);
+  }
+  return parseLibraryHtml(await resp.text());
+}
+
+/**
+ * Parse the /search HTML into LibraryModel entries.
+ *
+ * The markup has one anchor per card pointing at `/library/<slug>`. Inside the
+ * card are size-label chips (e.g. "7b", "70b", "8x22b"), an optional
+ * description, and a pulls counter. We split on those anchors and extract each
+ * field with narrow regexes — any field we can't match is simply omitted, so
+ * markup tweaks degrade gracefully instead of throwing.
+ */
+export function parseLibraryHtml(html: string): LibraryModel[] {
+  const results: LibraryModel[] = [];
+  const seen = new Set<string>();
+
+  // Split the document on card anchors. The first chunk is pre-card chrome.
+  const cardRegex = /<a\b[^>]*href="\/library\/([a-z0-9][a-z0-9._\-\/]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = cardRegex.exec(html)) !== null) {
+    const slug = match[1];
+    const body = match[2];
+    // Skip obvious non-model links (tags, pagination, etc.).
+    if (slug.includes('/tags') || slug.includes('/blobs')) continue;
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+
+    // Parameter-size chips use a lowercase suffix (`7b`, `8x22b`, `1.5b`).
+    // Pull counters use uppercase K/M/B (`6.3M`, `480K`, `2.1B`). The
+    // capitalization is what distinguishes the two in the markup.
+    const sizes = Array.from(
+      body.matchAll(/>\s*(\d+(?:\.\d+)?(?:x\d+)?b)\s*</g),
+      (m) => m[1],
+    );
+    const descMatch = body.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+    const description = descMatch
+      ? stripTags(descMatch[1]).replace(/\s+/g, ' ').trim().slice(0, 140)
+      : undefined;
+    const pullsMatch = body.match(/>\s*(\d+(?:\.\d+)?[KMB])\s*</);
+    const pulls = pullsMatch ? pullsMatch[1] : undefined;
+
+    results.push({ name: slug, description, sizes, pulls });
+  }
+  return results;
+}
+
+function stripTags(s: string): string {
+  return s.replace(/<[^>]+>/g, '');
+}
