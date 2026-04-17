@@ -118,11 +118,16 @@ export function buildCompletionMessage(
 /**
  * Send the completion message and set up button collectors
  * that inject follow-up prompts into the session.
+ *
+ * `onFollowUp` is called with the canned prompt when a button is pressed.
+ * It should run a full agent turn for the prompt. If omitted, the button
+ * click is acknowledged but no model call is made (useful for tests).
  */
 export async function sendCompletionWithNextSteps(
   channel: SendableChannel,
   userId: string,
   summary: ToolUsageSummary,
+  onFollowUp?: (prompt: string) => Promise<void>,
 ): Promise<void> {
   const { embed, row } = buildCompletionMessage(userId, summary);
 
@@ -151,14 +156,22 @@ export async function sendCompletionWithNextSteps(
     };
 
     const prompt = prompts[btn.customId];
-    if (prompt) {
-      // Send as a regular message in the channel so the message handler picks it up
-      await btn.deferUpdate();
-      await channel.send(prompt);
-    }
+    if (!prompt) return;
 
-    // Disable buttons after use
+    await btn.deferUpdate().catch(() => {});
+    // Stop the collector first so the buttons disable immediately
+    // and subsequent clicks hit interactionCreate (which will ack gracefully).
     collector.stop();
+    // Echo the prompt so the user can see what was dispatched.
+    await channel.send(`> ▶️ ${prompt}`).catch(() => {});
+
+    if (onFollowUp) {
+      try {
+        await onFollowUp(prompt);
+      } catch (err) {
+        await channel.send('Failed to run follow-up action.').catch(() => {});
+      }
+    }
   });
 
   collector.on('end', () => {
