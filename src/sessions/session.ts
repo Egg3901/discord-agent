@@ -36,4 +36,7 @@ export interface Session {
 
   // Timestamp when the user was warned about impending session expiry
   warnedAt?: number;
+
+  // Queue of prompts waiting to be processed after the current response finishes
+  promptQueue?: string[];
 }

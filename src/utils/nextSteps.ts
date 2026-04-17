@@ -117,12 +117,16 @@ export function buildCompletionMessage(
 
 /**
  * Send the completion message and set up button collectors
- * that inject follow-up prompts into the session.
+ * that inject follow-up prompts into the session via a callback.
+ *
+ * @param processPrompt - Called with the chosen prompt string; the caller is
+ *   responsible for routing it into the agent loop (with queuing support).
  */
 export async function sendCompletionWithNextSteps(
   channel: SendableChannel,
   userId: string,
   summary: ToolUsageSummary,
+  processPrompt: (prompt: string) => void,
 ): Promise<void> {
   const { embed, row } = buildCompletionMessage(userId, summary);
 
@@ -152,9 +156,9 @@ export async function sendCompletionWithNextSteps(
 
     const prompt = prompts[btn.customId];
     if (prompt) {
-      // Send as a regular message in the channel so the message handler picks it up
       await btn.deferUpdate();
-      await channel.send(prompt);
+      // Route directly into the agent loop — no bot message intermediary
+      processPrompt(prompt);
     }
 
     // Disable buttons after use

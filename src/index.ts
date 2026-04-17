@@ -99,7 +99,7 @@ async function main() {
   handleInteractionCreate(client, commandMap);
   handleMessageCreate(client, sessionManager, aiClient, rateLimiter, repoFetcher);
   handleReactionAdd(client, sessionManager);
-  handleGithubLinkDetect(client);
+  handleGithubLinkDetect(client, sessionManager, aiClient, repoFetcher);
 
   // Login
   await client.login(config.DISCORD_TOKEN);
