@@ -34,6 +34,15 @@ export interface Session {
   // True while a response is being generated — prevents concurrent message handling
   busy?: boolean;
 
+  // User turns queued while the session was busy. Drained after the current turn finishes.
+  pendingMessages?: QueuedTurn[];
+
   // Timestamp when the user was warned about impending session expiry
   warnedAt?: number;
+}
+
+export interface QueuedTurn {
+  content: string;
+  userId: string;
+  imageAttachments?: { mediaType: string; base64Data: string }[];
 }

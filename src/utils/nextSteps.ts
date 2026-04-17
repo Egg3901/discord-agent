@@ -116,6 +116,12 @@ export function buildCompletionMessage(
 }
 
 /**
+ * Callback for when a next-step button is clicked. Implementations should
+ * feed the generated prompt back into the same session as a new user turn.
+ */
+export type NextStepFollowUp = (prompt: string, userId: string) => Promise<void>;
+
+/**
  * Send the completion message and set up button collectors
  * that inject follow-up prompts into the session.
  */
@@ -123,6 +129,7 @@ export async function sendCompletionWithNextSteps(
   channel: SendableChannel,
   userId: string,
   summary: ToolUsageSummary,
+  onFollowUp?: NextStepFollowUp,
 ): Promise<void> {
   const { embed, row } = buildCompletionMessage(userId, summary);
 
@@ -151,13 +158,24 @@ export async function sendCompletionWithNextSteps(
     };
 
     const prompt = prompts[btn.customId];
-    if (prompt) {
-      // Send as a regular message in the channel so the message handler picks it up
-      await btn.deferUpdate();
-      await channel.send(prompt);
+    if (!prompt) {
+      await btn.deferUpdate().catch(() => {});
+      return;
     }
 
-    // Disable buttons after use
+    // Disable this row so the buttons can't be clicked twice; echo the prompt
+    // so the user sees what was submitted.
+    await btn.update({ components: [] }).catch(() => btn.deferUpdate().catch(() => {}));
+    await channel.send(`> **${btn.user.username}** chose: *${prompt}*`).catch(() => {});
+
+    if (onFollowUp) {
+      try {
+        await onFollowUp(prompt, btn.user.id);
+      } catch (err) {
+        await channel.send(`*Failed to submit follow-up: ${(err as Error).message}*`).catch(() => {});
+      }
+    }
+
     collector.stop();
   });
 

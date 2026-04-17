@@ -37,6 +37,7 @@ import { AIClient } from './claude/aiClient.js';
 import { SessionManager } from './sessions/sessionManager.js';
 import { RateLimiter } from './bot/middleware/rateLimiter.js';
 import { RepoFetcher } from './github/repoFetcher.js';
+import { TurnRunner } from './bot/turnRunner.js';
 import { getDatabase, closeDatabase, loadConfigValues } from './storage/database.js';
 import type { CommandHandler } from './bot/commands/types.js';
 
@@ -55,6 +56,7 @@ async function main() {
   const sessionManager = new SessionManager();
   const rateLimiter = new RateLimiter();
   const repoFetcher = new RepoFetcher();
+  const turnRunner = new TurnRunner(aiClient, sessionManager, repoFetcher);
 
   // Create commands
   const commands: CommandHandler[] = [
@@ -97,7 +99,7 @@ async function main() {
   // Wire up event handlers
   handleReady(client);
   handleInteractionCreate(client, commandMap);
-  handleMessageCreate(client, sessionManager, aiClient, rateLimiter, repoFetcher);
+  handleMessageCreate(client, sessionManager, rateLimiter, turnRunner);
   handleReactionAdd(client, sessionManager);
   handleGithubLinkDetect(client);
 
