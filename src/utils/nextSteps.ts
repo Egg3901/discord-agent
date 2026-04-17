@@ -117,12 +117,16 @@ export function buildCompletionMessage(
 
 /**
  * Send the completion message and set up button collectors
- * that inject follow-up prompts into the session.
+ * that inject follow-up prompts directly into the AI pipeline via onPrompt.
+ *
+ * @param onPrompt - Called with the selected prompt text; implementations
+ *   should enqueue or immediately process the prompt through the session loop.
  */
 export async function sendCompletionWithNextSteps(
   channel: SendableChannel,
   userId: string,
   summary: ToolUsageSummary,
+  onPrompt: (prompt: string) => void,
 ): Promise<void> {
   const { embed, row } = buildCompletionMessage(userId, summary);
 
@@ -152,9 +156,8 @@ export async function sendCompletionWithNextSteps(
 
     const prompt = prompts[btn.customId];
     if (prompt) {
-      // Send as a regular message in the channel so the message handler picks it up
       await btn.deferUpdate();
-      await channel.send(prompt);
+      onPrompt(prompt); // inject directly into the AI pipeline, not the Discord message stream
     }
 
     // Disable buttons after use

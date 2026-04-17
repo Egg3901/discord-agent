@@ -20,6 +20,7 @@ import { config } from '../../config.js';
 import { logUsage } from '../../storage/database.js';
 import { TOOL_EMOJIS, TOOL_LABELS, formatToolDetail, formatCCToolDetail } from '../../utils/toolDisplay.js';
 import { sendCompletionWithNextSteps } from '../../utils/nextSteps.js';
+import type { Session } from '../../sessions/session.js';
 
 export function handleMessageCreate(
   client: Client,
@@ -28,111 +29,24 @@ export function handleMessageCreate(
   rateLimiter: RateLimiter,
   repoFetcher: RepoFetcher,
 ): void {
-  client.on('messageCreate', async (message: Message) => {
-    if (message.author.bot) return;
 
-    const isDm = message.channel.type === ChannelType.DM;
+  // ─── Core AI processing ─────────────────────────────────────────────────────
 
-    if (
-      !isDm &&
-      message.channel.type !== ChannelType.PublicThread &&
-      message.channel.type !== ChannelType.PrivateThread
-    ) {
-      return;
-    }
-
-    // Access check — require admin permissions
-    if (!isAdmin(message.member)) {
-      if (isDm) {
-        logger.debug({ userId: message.author.id }, 'DM message denied: user not on allowlist');
-      }
-      return;
-    }
-
-    const threadId = message.channel.id;
-    const session = sessionManager.getByThread(threadId);
-    if (!session) {
-      // In DMs without an active session, ignore silently
-      if (isDm) {
-        logger.debug({ userId: message.author.id, channelId: threadId }, 'DM message ignored: no active session for this channel');
-      }
-      return;
-    }
-
-    // Reject concurrent messages while a response is being generated
-    if (session.busy) {
-      await message.reply('Still working on the previous message. Please wait for it to finish (or react with 🛑 to cancel).');
-      return;
-    }
-
-    if (!rateLimiter.check(message.author.id)) {
-      await message.reply('You\'re sending messages too fast. Please wait a moment.');
-      return;
-    }
-
-    const channel = message.channel as ThreadChannel | DMChannel;
-
-    // Include file attachment contents and images in the message
-    let content = message.content;
-    const imageAttachments: { mediaType: string; base64Data: string }[] = [];
-    if (message.attachments.size > 0) {
-      for (const attachment of message.attachments.values()) {
-        if (attachment.contentType?.startsWith('image/') && attachment.size <= 5_242_880) {
-          // Image attachment — base64 encode for vision
-          try {
-            const resp = await fetch(attachment.url, { signal: AbortSignal.timeout(15_000) });
-            const buffer = Buffer.from(await resp.arrayBuffer());
-            imageAttachments.push({
-              mediaType: attachment.contentType,
-              base64Data: buffer.toString('base64'),
-            });
-          } catch {
-            content += `\n\n[Could not read image: ${attachment.name}]`;
-          }
-        } else if (attachment.contentType?.startsWith('text/') || isCodeFile(attachment.name)) {
-          try {
-            const resp = await fetch(attachment.url, { signal: AbortSignal.timeout(15_000) });
-            const text = await resp.text();
-            if (text.length <= 100_000) {
-              content += `\n\n--- ${attachment.name} ---\n\`\`\`\n${text}\n\`\`\``;
-            } else {
-              content += `\n\n[File ${attachment.name} too large to include (${Math.round(text.length / 1000)}KB)]`;
-            }
-          } catch {
-            content += `\n\n[Could not read file: ${attachment.name}]`;
-          }
-        } else if (attachment.contentType?.startsWith('image/')) {
-          content += `\n\n[Image ${attachment.name} too large (${Math.round(attachment.size / 1_048_576)}MB, max 5MB)]`;
-        } else {
-          content += `\n\n[Attached file: ${attachment.name} (${attachment.contentType || 'unknown type'})]`;
-        }
-      }
-    }
-
-    // Auto-fetch raw GitHub/Gist URLs embedded in the message
-    const urlPattern = /https?:\/\/(?:raw\.githubusercontent\.com|gist\.githubusercontent\.com)\/[^\s)>\]]+/g;
-    const urls = content.match(urlPattern);
-    if (urls && urls.length > 0) {
-      for (const url of urls.slice(0, 3)) { // Max 3 URLs
-        try {
-          const resp = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-          if (resp.ok) {
-            const text = await resp.text();
-            if (text.length <= 100_000) {
-              const filename = url.split('/').pop() || 'file';
-              content += `\n\n--- ${filename} (from URL) ---\n\`\`\`\n${text}\n\`\`\``;
-            } else {
-              content += `\n\n[URL content too large: ${url}]`;
-            }
-          }
-        } catch {
-          content += `\n\n[Could not fetch: ${url}]`;
-        }
-      }
-    }
-
+  /**
+   * Run one full AI round-trip for `content` inside `session`, streaming the
+   * response back to `channel`.  Sets/clears session.busy and triggers the
+   * next queued item on completion.
+   */
+  async function processContent(
+    content: string,
+    userId: string,
+    channel: ThreadChannel | DMChannel,
+    session: Session,
+    threadId: string,
+    imageAttachments: { mediaType: string; base64Data: string }[] = [],
+  ): Promise<void> {
     try {
-      await channel.sendTyping();
+      await (channel as any).sendTyping?.();
 
       session.busy = true;
 
@@ -141,14 +55,12 @@ export function handleMessageCreate(
         content,
       });
 
-      // Create abort controller for this request
       const controller = new AbortController();
       session.activeController = controller;
 
       const thinkingMsg = await channel.send('Thinking...');
       const streamer = new ResponseStreamer(channel, thinkingMsg);
 
-      // Periodic elapsed-time update so users know the bot is alive during long tasks.
       const thinkingStart = Date.now();
       const thinkingTimer = setInterval(() => {
         const secs = Math.round((Date.now() - thinkingStart) / 1000);
@@ -163,7 +75,7 @@ export function handleMessageCreate(
 
         const onUsage = (usage: import('../../claude/aiClient.js').UsageInfo) => {
           logUsage({
-            userId: message.author.id,
+            userId,
             sessionId: session.id,
             keyId: usage.keyId,
             tokensIn: usage.tokensIn,
@@ -173,7 +85,6 @@ export function handleMessageCreate(
           });
         };
 
-        // Common stream options with thinking overrides and abort signal
         const baseStreamOptions = {
           repoContext: session.repoContext,
           secondaryRepoContext: session.secondaryRepoContext,
@@ -197,12 +108,14 @@ export function handleMessageCreate(
           onUsage,
         };
 
+        // Callback passed to sendCompletionWithNextSteps so button clicks go
+        // directly into the session queue instead of through Discord messages.
+        const promptHandler = (prompt: string) => enqueue(prompt, userId, channel, session, threadId);
+
         const effectiveModel = session.modelOverride || config.ANTHROPIC_MODEL;
         const isCC = getProviderForModel(effectiveModel) === 'claude-code';
 
         if (isCC) {
-          // Claude Code handles tools internally — stream events directly,
-          // displaying tool notifications without re-executing them.
           const loopStart = Date.now();
           let fullResponse = '';
           let toolCallCount = 0;
@@ -212,7 +125,6 @@ export function handleMessageCreate(
           for await (const event of aiClient.streamResponse(session.messages, baseStreamOptions)) {
             if (controller.signal.aborted) break;
             if (event.type === 'text') {
-              // If tools were used, detach so the response appears as a new message
               if (toolCallCount > 0 && !detached) {
                 detached = true;
                 clearInterval(thinkingTimer);
@@ -221,7 +133,6 @@ export function handleMessageCreate(
               fullResponse += event.text;
               await streamer.push(event.text);
             } else if (event.type === 'tool_use') {
-              // Mark previous tool as done when a new one starts
               if (lastToolMsg) {
                 await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
               }
@@ -231,7 +142,6 @@ export function handleMessageCreate(
               lastToolMsg = await channel.send(`> \u{1F527} \`${event.name}\`${detail ? ` ${detail}` : ''}`);
             }
           }
-          // Mark the last tool as done
           if (lastToolMsg) {
             await lastToolMsg.edit(`${lastToolMsg.content} \u2014 \u2713`).catch(() => {});
             lastToolMsg = null;
@@ -240,14 +150,13 @@ export function handleMessageCreate(
           await streamer.finish();
           sessionManager.addMessage(threadId, { role: 'assistant', content: fullResponse });
           if (toolCallCount > 0) {
-            await sendCompletionWithNextSteps(channel, message.author.id, {
+            await sendCompletionWithNextSteps(channel, userId, {
               toolNames,
               totalCalls: toolCallCount,
               elapsed: Date.now() - loopStart,
-            });
+            }, promptHandler);
           }
         } else if (hasTools) {
-          // Agentic mode for Anthropic / Gemini
           const toolExecutor = new ToolExecutor(
             hasRepo ? repoFetcher : null,
             session.repoOwner || '',
@@ -256,7 +165,6 @@ export function handleMessageCreate(
             session.repoContext?.repoUrl,
             session.defaultBranch,
           );
-          // Attach secondary repo if this is a /synthesize session
           if (hasSecondaryRepo) {
             toolExecutor.setSecondaryRepo(
               session.secondaryRepoOwner!,
@@ -277,7 +185,6 @@ export function handleMessageCreate(
             { ...baseStreamOptions, enableRepoTools: !!hasRepo, enableSecondaryRepo: hasSecondaryRepo },
             {
               onTextChunk: async (text) => {
-                // If tools were used, detach so the final response is a new message
                 if (agentToolCount > 0 && !agentDetached) {
                   agentDetached = true;
                   clearInterval(thinkingTimer);
@@ -315,14 +222,13 @@ export function handleMessageCreate(
           }
           if (result.toolCallCount > 0) {
             logger.info({ sessionId: session.id, toolCalls: result.toolCallCount, iterations: result.iterations }, 'Agent loop completed');
-            await sendCompletionWithNextSteps(channel, message.author.id, {
+            await sendCompletionWithNextSteps(channel, userId, {
               toolNames: agentToolNames,
               totalCalls: result.toolCallCount,
               elapsed: Date.now() - loopStart,
-            });
+            }, promptHandler);
           }
         } else {
-          // Simple streaming mode
           let fullResponse = '';
           for await (const chunk of aiClient.streamText(session.messages, baseStreamOptions)) {
             if (controller.signal.aborted) break;
@@ -346,11 +252,154 @@ export function handleMessageCreate(
         clearInterval(thinkingTimer);
         session.activeController = undefined;
         session.busy = false;
+        // Drain any follow-up prompts that arrived while we were busy
+        drainQueue(userId, channel, session, threadId);
       }
     } catch (err) {
       session.busy = false;
-      logger.error({ err, threadId }, 'Error handling thread message');
+      logger.error({ err, threadId }, 'Error handling session message');
     }
+  }
+
+  // ─── Follow-up queue ────────────────────────────────────────────────────────
+
+  /**
+   * Add `prompt` to the session queue.  If the session is idle, start draining
+   * immediately; otherwise the in-flight processContent will drain on finish.
+   */
+  function enqueue(
+    prompt: string,
+    userId: string,
+    channel: ThreadChannel | DMChannel,
+    session: Session,
+    threadId: string,
+  ): void {
+    if (!session.pendingQueue) session.pendingQueue = [];
+    session.pendingQueue.push(prompt);
+    if (!session.busy) {
+      drainQueue(userId, channel, session, threadId);
+    }
+  }
+
+  /**
+   * Process all pending queued prompts sequentially.
+   * Called after every processContent completion (via finally) and from enqueue
+   * when the session happens to be idle.
+   */
+  function drainQueue(
+    userId: string,
+    channel: ThreadChannel | DMChannel,
+    session: Session,
+    threadId: string,
+  ): void {
+    if (session.busy || !session.pendingQueue?.length) return;
+    const next = session.pendingQueue.shift()!;
+    // processContent's finally block will call drainQueue again for the rest
+    void processContent(next, userId, channel, session, threadId);
+  }
+
+  // ─── Discord message event ──────────────────────────────────────────────────
+
+  client.on('messageCreate', async (message: Message) => {
+    if (message.author.bot) return;
+
+    const isDm = message.channel.type === ChannelType.DM;
+
+    if (
+      !isDm &&
+      message.channel.type !== ChannelType.PublicThread &&
+      message.channel.type !== ChannelType.PrivateThread
+    ) {
+      return;
+    }
+
+    if (!isAdmin(message.member)) {
+      if (isDm) {
+        logger.debug({ userId: message.author.id }, 'DM message denied: user not on allowlist');
+      }
+      return;
+    }
+
+    const threadId = message.channel.id;
+    const session = sessionManager.getByThread(threadId);
+    if (!session) {
+      if (isDm) {
+        logger.debug({ userId: message.author.id, channelId: threadId }, 'DM message ignored: no active session for this channel');
+      }
+      return;
+    }
+
+    if (session.busy) {
+      await message.reply('Still working on the previous message. Please wait for it to finish (or react with 🛑 to cancel).');
+      return;
+    }
+
+    if (!rateLimiter.check(message.author.id)) {
+      await message.reply('You\'re sending messages too fast. Please wait a moment.');
+      return;
+    }
+
+    const channel = message.channel as ThreadChannel | DMChannel;
+
+    // Include file attachment contents and images in the message
+    let content = message.content;
+    const imageAttachments: { mediaType: string; base64Data: string }[] = [];
+    if (message.attachments.size > 0) {
+      for (const attachment of message.attachments.values()) {
+        if (attachment.contentType?.startsWith('image/') && attachment.size <= 5_242_880) {
+          try {
+            const resp = await fetch(attachment.url, { signal: AbortSignal.timeout(15_000) });
+            const buffer = Buffer.from(await resp.arrayBuffer());
+            imageAttachments.push({
+              mediaType: attachment.contentType,
+              base64Data: buffer.toString('base64'),
+            });
+          } catch {
+            content += `\n\n[Could not read image: ${attachment.name}]`;
+          }
+        } else if (attachment.contentType?.startsWith('text/') || isCodeFile(attachment.name)) {
+          try {
+            const resp = await fetch(attachment.url, { signal: AbortSignal.timeout(15_000) });
+            const text = await resp.text();
+            if (text.length <= 100_000) {
+              content += `\n\n--- ${attachment.name} ---\n\`\`\`\n${text}\n\`\`\``;
+            } else {
+              content += `\n\n[File ${attachment.name} too large to include (${Math.round(text.length / 1000)}KB)]`;
+            }
+          } catch {
+            content += `\n\n[Could not read file: ${attachment.name}]`;
+          }
+        } else if (attachment.contentType?.startsWith('image/')) {
+          content += `\n\n[Image ${attachment.name} too large (${Math.round(attachment.size / 1_048_576)}MB, max 5MB)]`;
+        } else {
+          content += `\n\n[Attached file: ${attachment.name} (${attachment.contentType || 'unknown type'})]`;
+        }
+      }
+    }
+
+    // Auto-fetch raw GitHub/Gist URLs embedded in the message
+    const urlPattern = /https?:\/\/(?:raw\.githubusercontent\.com|gist\.githubusercontent\.com)\/[^\s)>\]]+/g;
+    const urls = content.match(urlPattern);
+    if (urls && urls.length > 0) {
+      for (const url of urls.slice(0, 3)) {
+        try {
+          const resp = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+          if (resp.ok) {
+            const text = await resp.text();
+            if (text.length <= 100_000) {
+              const filename = url.split('/').pop() || 'file';
+              content += `\n\n--- ${filename} (from URL) ---\n\`\`\`\n${text}\n\`\`\``;
+            } else {
+              content += `\n\n[URL content too large: ${url}]`;
+            }
+          }
+        } catch {
+          content += `\n\n[Could not fetch: ${url}]`;
+        }
+      }
+    }
+
+    await processContent(content, message.author.id, channel, session, threadId, imageAttachments);
   });
 }
 

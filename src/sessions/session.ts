@@ -34,6 +34,9 @@ export interface Session {
   // True while a response is being generated — prevents concurrent message handling
   busy?: boolean;
 
+  // Queued follow-up prompts injected by next-step buttons while the session is busy
+  pendingQueue?: string[];
+
   // Timestamp when the user was warned about impending session expiry
   warnedAt?: number;
 }
