@@ -115,6 +115,30 @@ export function buildCompletionMessage(
   return { embed, row };
 }
 
+export interface CompletionOptions {
+  /**
+   * Invoked when the user clicks a next-step button. Receives the synthetic
+   * prompt for that action. The caller is responsible for driving it through
+   * the session pipeline (Discord's messageCreate event filters bot-authored
+   * messages, so button follow-ups cannot rely on channel.send).
+   */
+  onFollowUp?: (prompt: string) => Promise<void> | void;
+}
+
+const NEXT_STEP_PROMPTS: Record<string, string> = {
+  next_view_diff: 'Show me the git diff of all changes made so far.',
+  next_run_tests: 'Run the test suite and report the results.',
+  next_commit: 'Review the changes, then commit them with an appropriate message.',
+  next_modify: 'Based on the code you just read, suggest and implement improvements.',
+};
+
+const NEXT_STEP_ACK: Record<string, string> = {
+  next_view_diff: '📋 Showing diff of changes…',
+  next_run_tests: '🧪 Running tests…',
+  next_commit: '💾 Committing changes…',
+  next_modify: '✏️ Planning modifications…',
+};
+
 /**
  * Send the completion message and set up button collectors
  * that inject follow-up prompts into the session.
@@ -123,6 +147,7 @@ export async function sendCompletionWithNextSteps(
   channel: SendableChannel,
   userId: string,
   summary: ToolUsageSummary,
+  options: CompletionOptions = {},
 ): Promise<void> {
   const { embed, row } = buildCompletionMessage(userId, summary);
 
@@ -143,22 +168,35 @@ export async function sendCompletionWithNextSteps(
       return;
     }
 
-    const prompts: Record<string, string> = {
-      next_view_diff: 'Show me the git diff of all changes made so far.',
-      next_run_tests: 'Run the test suite and report the results.',
-      next_commit: 'Review the changes, then commit them with an appropriate message.',
-      next_modify: 'Based on the code you just read, suggest and implement improvements.',
-    };
-
-    const prompt = prompts[btn.customId];
-    if (prompt) {
-      // Send as a regular message in the channel so the message handler picks it up
-      await btn.deferUpdate();
-      await channel.send(prompt);
+    const prompt = NEXT_STEP_PROMPTS[btn.customId];
+    if (!prompt) {
+      await btn.deferUpdate().catch(() => {});
+      collector.stop();
+      return;
     }
 
-    // Disable buttons after use
+    // Acknowledge and disable buttons on the completion message so the user
+    // can see the action fired and can't double-click.
+    await btn.update({ components: [] }).catch(() => {});
     collector.stop();
+
+    // Surface the triggered prompt so the user has context for the response
+    // that follows. This is visible in the channel as a bot message.
+    const ack = NEXT_STEP_ACK[btn.customId] ?? `> ${prompt}`;
+    await channel.send(ack).catch(() => {});
+
+    if (options.onFollowUp) {
+      try {
+        await options.onFollowUp(prompt);
+      } catch {
+        // Errors are surfaced by the follow-up pipeline itself.
+      }
+    } else {
+      // No handler wired up — degrade gracefully instead of silently dropping.
+      await channel.send(
+        '*Next-step action is not available in this context. Send the prompt manually to continue.*',
+      ).catch(() => {});
+    }
   });
 
   collector.on('end', () => {
