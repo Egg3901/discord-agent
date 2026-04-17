@@ -96,7 +96,7 @@ async function main() {
 
   // Wire up event handlers
   handleReady(client);
-  handleInteractionCreate(client, commandMap);
+  handleInteractionCreate(client, commandMap, { sessionManager, aiClient, rateLimiter, repoFetcher });
   handleMessageCreate(client, sessionManager, aiClient, rateLimiter, repoFetcher);
   handleReactionAdd(client, sessionManager);
   handleGithubLinkDetect(client);

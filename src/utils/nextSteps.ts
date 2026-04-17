@@ -3,11 +3,9 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
-  ComponentType,
-  type ButtonInteraction,
   type Message,
 } from 'discord.js';
-import { BotColors, formatDuration } from './embedHelpers.js';
+import { BotColors } from './embedHelpers.js';
 
 /** Any channel that supports send() — threads, text channels, DMs. */
 type SendableChannel = { send: (options: any) => Promise<Message> };
@@ -45,6 +43,31 @@ export interface ToolUsageSummary {
 }
 
 /**
+ * Stable customIds for the follow-up buttons, handled globally in
+ * interactionCreate. Kept as constants so the handler and the builder
+ * can't drift.
+ */
+export const NEXT_STEP_IDS = {
+  viewDiff: 'next_view_diff',
+  runTests: 'next_run_tests',
+  commit: 'next_commit',
+  modify: 'next_modify',
+} as const;
+
+/**
+ * Prompt injected into the session when each follow-up button is clicked.
+ * Exported so the global interaction handler resolves the same text
+ * regardless of when the user clicks.
+ */
+export const NEXT_STEP_PROMPTS: Record<string, string> = {
+  [NEXT_STEP_IDS.viewDiff]: 'Show me the git diff of all changes made so far.',
+  [NEXT_STEP_IDS.runTests]: 'Run the test suite and report the results.',
+  [NEXT_STEP_IDS.commit]:
+    'Review the changes, commit them with an appropriate message, push the branch, and open a pull request. Reply with the PR URL when finished.',
+  [NEXT_STEP_IDS.modify]: 'Based on the code you just read, suggest and implement improvements.',
+};
+
+/**
  * Build a completion embed and contextual next-step buttons
  * based on which tools were used during the agent loop.
  */
@@ -70,7 +93,7 @@ export function buildCompletionMessage(
   if (hadWrites && !hadGit) {
     buttons.push(
       new ButtonBuilder()
-        .setCustomId('next_view_diff')
+        .setCustomId(NEXT_STEP_IDS.viewDiff)
         .setLabel('View Diff')
         .setEmoji('📋')
         .setStyle(ButtonStyle.Secondary),
@@ -80,7 +103,7 @@ export function buildCompletionMessage(
   if (hadWrites && !hadBuild) {
     buttons.push(
       new ButtonBuilder()
-        .setCustomId('next_run_tests')
+        .setCustomId(NEXT_STEP_IDS.runTests)
         .setLabel('Run Tests')
         .setEmoji('🧪')
         .setStyle(ButtonStyle.Secondary),
@@ -90,8 +113,8 @@ export function buildCompletionMessage(
   if (hadWrites && !hadGit) {
     buttons.push(
       new ButtonBuilder()
-        .setCustomId('next_commit')
-        .setLabel('Commit Changes')
+        .setCustomId(NEXT_STEP_IDS.commit)
+        .setLabel('Commit & Open PR')
         .setEmoji('💾')
         .setStyle(ButtonStyle.Primary),
     );
@@ -100,7 +123,7 @@ export function buildCompletionMessage(
   if (hadReads && !hadWrites) {
     buttons.push(
       new ButtonBuilder()
-        .setCustomId('next_modify')
+        .setCustomId(NEXT_STEP_IDS.modify)
         .setLabel('Modify Code')
         .setEmoji('✏️')
         .setStyle(ButtonStyle.Secondary),
@@ -116,8 +139,9 @@ export function buildCompletionMessage(
 }
 
 /**
- * Send the completion message and set up button collectors
- * that inject follow-up prompts into the session.
+ * Send the completion message with follow-up buttons. Clicks are handled
+ * globally in `interactionCreate`, so the buttons remain live for as long
+ * as the session is active (no 2-minute collector timeout).
  */
 export async function sendCompletionWithNextSteps(
   channel: SendableChannel,
@@ -129,39 +153,5 @@ export async function sendCompletionWithNextSteps(
   const msgOptions: any = { embeds: [embed] };
   if (row) msgOptions.components = [row];
 
-  const msg = await channel.send(msgOptions).catch(() => null);
-  if (!msg || !row) return;
-
-  const collector = msg.createMessageComponentCollector({
-    componentType: ComponentType.Button,
-    time: 120_000, // 2 minute window
-  });
-
-  collector.on('collect', async (btn: ButtonInteraction) => {
-    if (btn.user.id !== userId) {
-      await btn.reply({ content: 'Only the session owner can use these.', ephemeral: true });
-      return;
-    }
-
-    const prompts: Record<string, string> = {
-      next_view_diff: 'Show me the git diff of all changes made so far.',
-      next_run_tests: 'Run the test suite and report the results.',
-      next_commit: 'Review the changes, then commit them with an appropriate message.',
-      next_modify: 'Based on the code you just read, suggest and implement improvements.',
-    };
-
-    const prompt = prompts[btn.customId];
-    if (prompt) {
-      // Send as a regular message in the channel so the message handler picks it up
-      await btn.deferUpdate();
-      await channel.send(prompt);
-    }
-
-    // Disable buttons after use
-    collector.stop();
-  });
-
-  collector.on('end', () => {
-    msg.edit({ components: [] }).catch(() => {});
-  });
+  await channel.send(msgOptions).catch(() => {});
 }
