@@ -7,7 +7,8 @@ import {
   type ButtonInteraction,
   type Message,
 } from 'discord.js';
-import { BotColors, formatDuration } from './embedHelpers.js';
+import { BotColors } from './embedHelpers.js';
+import type { PendingPrompt } from '../sessions/session.js';
 
 /** Any channel that supports send() — threads, text channels, DMs. */
 type SendableChannel = { send: (options: any) => Promise<Message> };
@@ -43,6 +44,12 @@ export interface ToolUsageSummary {
   totalCalls: number;
   elapsed: number; // ms
 }
+
+/**
+ * Enqueue a follow-up prompt for processing by the agent loop. Returns the
+ * queue position (0 = ran immediately).
+ */
+export type EnqueueFollowUp = (prompt: PendingPrompt) => number;
 
 /**
  * Build a completion embed and contextual next-step buttons
@@ -107,7 +114,6 @@ export function buildCompletionMessage(
     );
   }
 
-  // Max 5 buttons per row
   const row = buttons.length > 0
     ? new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons.slice(0, 5))
     : null;
@@ -115,14 +121,36 @@ export function buildCompletionMessage(
   return { embed, row };
 }
 
+const PROMPTS: Record<string, { prompt: string; label: string }> = {
+  next_view_diff: {
+    prompt: 'Show me the git diff of all changes made so far.',
+    label: '📋 View Diff',
+  },
+  next_run_tests: {
+    prompt: 'Run the test suite and report the results.',
+    label: '🧪 Run Tests',
+  },
+  next_commit: {
+    prompt: 'Review the changes, then commit them with an appropriate message.',
+    label: '💾 Commit Changes',
+  },
+  next_modify: {
+    prompt: 'Based on the code you just read, suggest and implement improvements.',
+    label: '✏️ Modify Code',
+  },
+};
+
 /**
- * Send the completion message and set up button collectors
- * that inject follow-up prompts into the session.
+ * Send the completion message with next-step buttons. Clicks are routed
+ * through `enqueueFollowUp`, which injects the prompt as a real user-role
+ * message into the agent loop (either immediately or queued behind the
+ * currently-running turn).
  */
 export async function sendCompletionWithNextSteps(
   channel: SendableChannel,
   userId: string,
   summary: ToolUsageSummary,
+  enqueueFollowUp: EnqueueFollowUp,
 ): Promise<void> {
   const { embed, row } = buildCompletionMessage(userId, summary);
 
@@ -132,9 +160,11 @@ export async function sendCompletionWithNextSteps(
   const msg = await channel.send(msgOptions).catch(() => null);
   if (!msg || !row) return;
 
+  // Keep buttons live for the lifetime of the session (sessions prune after
+  // 30 min of inactivity). Idle-reset on each click.
   const collector = msg.createMessageComponentCollector({
     componentType: ComponentType.Button,
-    time: 120_000, // 2 minute window
+    idle: 30 * 60_000,
   });
 
   collector.on('collect', async (btn: ButtonInteraction) => {
@@ -143,25 +173,33 @@ export async function sendCompletionWithNextSteps(
       return;
     }
 
-    const prompts: Record<string, string> = {
-      next_view_diff: 'Show me the git diff of all changes made so far.',
-      next_run_tests: 'Run the test suite and report the results.',
-      next_commit: 'Review the changes, then commit them with an appropriate message.',
-      next_modify: 'Based on the code you just read, suggest and implement improvements.',
-    };
-
-    const prompt = prompts[btn.customId];
-    if (prompt) {
-      // Send as a regular message in the channel so the message handler picks it up
-      await btn.deferUpdate();
-      await channel.send(prompt);
+    const action = PROMPTS[btn.customId];
+    if (!action) {
+      await btn.deferUpdate().catch(() => {});
+      return;
     }
 
-    // Disable buttons after use
-    collector.stop();
+    const queuePos = enqueueFollowUp({
+      userId,
+      content: action.prompt,
+      label: action.label,
+    });
+
+    // Acknowledge the click inline (replaces the button row so the user knows
+    // the action fired — avoids the "nothing happens" confusion).
+    const note = queuePos > 0
+      ? `*${action.label} — queued as follow-up #${queuePos}*`
+      : `*${action.label} — running...*`;
+    await btn.update({ embeds: [embed], components: [], content: note }).catch(async () => {
+      // If update fails (e.g. original message edited), acknowledge ephemerally.
+      await btn.reply({ content: note, ephemeral: true }).catch(() => {});
+    });
+
+    collector.stop('clicked');
   });
 
-  collector.on('end', () => {
+  collector.on('end', (_collected, reason) => {
+    if (reason === 'clicked') return; // Already updated
     msg.edit({ components: [] }).catch(() => {});
   });
 }

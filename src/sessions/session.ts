@@ -34,6 +34,18 @@ export interface Session {
   // True while a response is being generated — prevents concurrent message handling
   busy?: boolean;
 
+  // Follow-up prompts queued while the session was busy. Drained after the
+  // current agent run completes.
+  pendingPrompts?: PendingPrompt[];
+
   // Timestamp when the user was warned about impending session expiry
   warnedAt?: number;
+}
+
+export interface PendingPrompt {
+  userId: string;
+  content: string;
+  imageAttachments?: { mediaType: string; base64Data: string }[];
+  /** Shown to the user when the queued item starts processing. */
+  label?: string;
 }

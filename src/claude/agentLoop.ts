@@ -45,6 +45,13 @@ export async function runAgentLoop(
   let repeatedToolCount = 0;
   let nudgedForEmptyAnswer = false;
 
+  // Track tools the model actually called (normalized, so secondary_git_commit
+  // counts as git_commit) and what the user asked for in this turn. Used to
+  // nudge once if the model stops without performing a requested action.
+  const calledToolBases = new Set<string>();
+  const unfulfilledIntent = detectActionIntent(messages);
+  let nudgedForIntent = false;
+
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // Collect events from the stream
     const textChunks: string[] = [];
@@ -100,6 +107,9 @@ export async function runAgentLoop(
       newMessages.push(assistantMsg);
     }
 
+    // Record which tools the model has called so far (normalized primary/secondary).
+    for (const tu of toolUses) calledToolBases.add(normalizeToolBase(tu.name));
+
     // If no tool calls, the API signaled end_turn. Normally we're done — but if the
     // last tool result was an error AND the model produced little/no text, it likely
     // gave up mid-investigation. Nudge it once to continue before terminating.
@@ -122,6 +132,30 @@ export async function runAgentLoop(
         logger.debug({ iteration }, 'Agent loop: nudging after empty/error-only answer');
         continue;
       }
+
+      // Intent nudge: user asked for commit/push/PR (etc.) but the model
+      // ended the turn without calling the required tool — narrating instead
+      // of acting. Prompt it once to actually run the tool.
+      if (!nudgedForIntent) {
+        const missing = [...unfulfilledIntent].filter((t) => !calledToolBases.has(t));
+        if (missing.length > 0) {
+          nudgedForIntent = true;
+          const toolList = missing.map((t) => `\`${t}\``).join(', ');
+          const actionList = describeIntent(missing);
+          const nudge: ConversationMessage = {
+            role: 'user',
+            content:
+              `[System: The user asked you to ${actionList}, but you ended the turn without calling the required tool(s): ${toolList}. ` +
+              `Describing the action is not enough — actually call the tool now. ` +
+              `If you need info first (e.g. run git_status or git_diff before committing), call those too, then proceed through to ${toolList}.]`,
+          };
+          workingMessages.push(nudge);
+          newMessages.push(nudge);
+          logger.debug({ iteration, missing }, 'Agent loop: nudging for unfulfilled user intent');
+          continue;
+        }
+      }
+
       break;
     }
 
@@ -251,6 +285,67 @@ function isToolErrorBatch(msg: ConversationMessage | undefined): boolean {
       lower.includes('directory is empty or not found')
     );
   });
+}
+
+/** Strip a `secondary_` prefix so primary/secondary repo tools share one identity. */
+function normalizeToolBase(name: string): string {
+  return name.replace(/^secondary_/, '');
+}
+
+/**
+ * Extract the text of the most recent non-synthetic user message — i.e. the
+ * prompt that triggered this agent run, ignoring tool_result content and our
+ * own `[System: ...]` nudges.
+ */
+function extractLatestUserPrompt(messages: ConversationMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'user') continue;
+    let text = '';
+    if (typeof msg.content === 'string') {
+      text = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      text = msg.content
+        .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+        .map((b) => b.text)
+        .join(' ');
+    }
+    text = text.trim();
+    if (!text) continue;
+    if (text.startsWith('[System:')) continue;
+    return text;
+  }
+  return '';
+}
+
+/**
+ * Heuristic: scan the latest user prompt for imperative action words and
+ * return the set of tool "bases" (secondary-prefix stripped) the model should
+ * call to honor the request. Kept intentionally narrow — only git commit /
+ * push / pull-request actions, which are the high-signal cases where models
+ * most often claim done without actually running the tool.
+ */
+function detectActionIntent(messages: ConversationMessage[]): Set<string> {
+  const needed = new Set<string>();
+  const text = extractLatestUserPrompt(messages).toLowerCase();
+  if (!text) return needed;
+
+  if (/\bcommit(s|ted|ting)?\b/.test(text)) needed.add('git_commit');
+  if (/\bpush(es|ed|ing)?\b/.test(text)) needed.add('git_push');
+  if (/\b(pr|prs|pull[\s-]?request(s)?)\b/.test(text)) needed.add('create_pr');
+
+  return needed;
+}
+
+function describeIntent(missing: string[]): string {
+  const parts: string[] = [];
+  if (missing.includes('git_commit')) parts.push('commit');
+  if (missing.includes('git_push')) parts.push('push');
+  if (missing.includes('create_pr')) parts.push('open a pull request');
+  if (parts.length === 0) return 'complete the action';
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
 }
 
 function parseRequestInputPayload(input: Record<string, unknown>): RequestInputPayload {
