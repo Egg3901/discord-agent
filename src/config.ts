@@ -34,7 +34,7 @@ class Config {
   // Agent mode
   ENABLE_EXTENDED_THINKING = process.env['ENABLE_EXTENDED_THINKING'] === 'true';
   THINKING_BUDGET_TOKENS = parseInt(optional('THINKING_BUDGET_TOKENS', '10000'), 10);
-  MAX_AGENT_ITERATIONS = parseInt(optional('MAX_AGENT_ITERATIONS', '10'), 10);
+  MAX_AGENT_ITERATIONS = parseInt(optional('MAX_AGENT_ITERATIONS', '25'), 10);
 
   // Script execution
   ENABLE_SCRIPT_EXECUTION = process.env['ENABLE_SCRIPT_EXECUTION'] === 'true';
