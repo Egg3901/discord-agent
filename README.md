@@ -1,4 +1,5 @@
 # Discord Agent
+<!-- test: verify git workflow -->
 
 A Discord bot that provides Claude Code/Codex-like coding assistance via Discord, with support for multiple API key pooling and load balancing.
 
